@@ -16,6 +16,7 @@ mod affine;
 mod arclen;
 mod bbox;
 mod curve;
+mod elevate;
 mod flatten;
 pub mod fuzz;
 mod nearest;
