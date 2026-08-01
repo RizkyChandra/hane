@@ -599,7 +599,7 @@ fn parse_os2(t: &[u8]) -> Result<Os2, Error> {
 ///
 /// `checked_add` rather than `+`: `off` comes from the file, and a wrapped end
 /// offset would produce a range that `get` accepts.
-fn u16_at(data: &[u8], off: usize) -> Result<u16, Error> {
+pub(crate) fn u16_at(data: &[u8], off: usize) -> Result<u16, Error> {
     let end = off
         .checked_add(2)
         .ok_or(Error::Malformed("offset overflow"))?;
@@ -610,12 +610,12 @@ fn u16_at(data: &[u8], off: usize) -> Result<u16, Error> {
 }
 
 /// A big-endian `i16` at a byte offset.
-fn i16_at(data: &[u8], off: usize) -> Result<i16, Error> {
+pub(crate) fn i16_at(data: &[u8], off: usize) -> Result<i16, Error> {
     u16_at(data, off).map(|v| v as i16)
 }
 
 /// A big-endian `u32` at a byte offset.
-fn u32_at(data: &[u8], off: usize) -> Result<u32, Error> {
+pub(crate) fn u32_at(data: &[u8], off: usize) -> Result<u32, Error> {
     let end = off
         .checked_add(4)
         .ok_or(Error::Malformed("offset overflow"))?;
@@ -626,22 +626,22 @@ fn u32_at(data: &[u8], off: usize) -> Result<u32, Error> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use hane_geom::fuzz::{Rng, check};
 
     // --- A synthetic font, so the tests do not depend on what is installed.
 
-    fn be16(out: &mut Vec<u8>, v: u16) {
+    pub(crate) fn be16(out: &mut Vec<u8>, v: u16) {
         out.extend_from_slice(&v.to_be_bytes());
     }
 
-    fn be32(out: &mut Vec<u8>, v: u32) {
+    pub(crate) fn be32(out: &mut Vec<u8>, v: u32) {
         out.extend_from_slice(&v.to_be_bytes());
     }
 
     /// `head`, with a 2048 unit em and a known bounding box.
-    fn head_table() -> Vec<u8> {
+    pub(crate) fn head_table() -> Vec<u8> {
         let mut t = Vec::new();
         be32(&mut t, 0x0001_0000);
         be32(&mut t, 0);
@@ -662,7 +662,7 @@ mod tests {
         t
     }
 
-    fn hhea_table(num_h_metrics: u16) -> Vec<u8> {
+    pub(crate) fn hhea_table(num_h_metrics: u16) -> Vec<u8> {
         let mut t = Vec::new();
         be32(&mut t, 0x0001_0000);
         be16(&mut t, 1600); // ascender
@@ -673,7 +673,7 @@ mod tests {
         t
     }
 
-    fn maxp_table(glyphs: u16) -> Vec<u8> {
+    pub(crate) fn maxp_table(glyphs: u16) -> Vec<u8> {
         let mut t = Vec::new();
         be32(&mut t, 0x0001_0000);
         be16(&mut t, glyphs);
@@ -810,7 +810,7 @@ mod tests {
     }
 
     /// Assemble a directory plus tables into a font file.
-    fn assemble(tables: &[(&[u8; 4], Vec<u8>)]) -> Vec<u8> {
+    pub(crate) fn assemble(tables: &[(&[u8; 4], Vec<u8>)]) -> Vec<u8> {
         assemble_at(0, tables)
     }
 
