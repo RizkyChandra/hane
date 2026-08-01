@@ -16,6 +16,7 @@ mod affine;
 mod curve;
 mod path;
 mod rect;
+mod split;
 mod vec2;
 
 pub use affine::Affine;
