@@ -140,10 +140,7 @@ pub fn hane_gl_probe(canvas: &HtmlCanvasElement) -> Result<GlProbe, JsValue> {
         return Ok(cached);
     }
 
-    let gl = canvas
-        .get_context_with_context_options("webgl2", &context_attributes())?
-        .ok_or_else(|| JsValue::from_str("this browser has no WebGL2 (D-003 needs it)"))?
-        .dyn_into::<Gl>()?;
+    let gl = context(canvas)?;
 
     watch_for_context_loss(canvas)?;
 
@@ -183,6 +180,20 @@ pub fn hane_gl_probe(canvas: &HtmlCanvasElement) -> Result<GlProbe, JsValue> {
 #[wasm_bindgen]
 pub fn hane_gl_context_lost() -> bool {
     CONTEXT_LOST.with(Cell::get)
+}
+
+/// The one `getContext` in the crate.
+///
+/// Every caller goes through here, because the *first* call decides the
+/// attributes for the life of the canvas and a second one asking for something
+/// else would be silently ignored -- so the renderer (#19) must not have its
+/// own, or it would inherit whatever ran first and never know.
+pub(crate) fn context(canvas: &HtmlCanvasElement) -> Result<Gl, JsValue> {
+    canvas
+        .get_context_with_context_options("webgl2", &context_attributes())?
+        .ok_or_else(|| JsValue::from_str("this browser has no WebGL2 (D-003 needs it)"))?
+        .dyn_into::<Gl>()
+        .map_err(Into::into)
 }
 
 /// The context attributes the whole renderer then lives with; see the module

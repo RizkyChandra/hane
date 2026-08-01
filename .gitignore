@@ -11,3 +11,4 @@
 /crates/hane-raster/tests/golden/*.actual.png
 /crates/hane-raster/tests/golden/*.diff.png
 /crates/hane-gpu/tests/gpu-diff/
+/crates/hane-gpu/tests/gpu-out/

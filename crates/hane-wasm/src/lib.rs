@@ -28,6 +28,7 @@
 
 pub mod bench;
 pub mod glctx;
+pub mod glrender;
 
 use hane_geom::{CubicBez, Point};
 

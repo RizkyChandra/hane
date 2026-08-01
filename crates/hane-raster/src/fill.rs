@@ -108,6 +108,167 @@ pub struct Color {
     pub a: u8,
 }
 
+/// How a source colour combines with what is already there (#22).
+///
+/// The SVG/PDF set, in the order the specification lists it: twelve separable
+/// modes that work one channel at a time, then four non-separable ones that
+/// read all three at once because hue and luminosity are not per-channel ideas.
+///
+/// Only the blend *function* varies. What surrounds it never does: the result
+/// is mixed towards the plain source colour by the backdrop's alpha and then
+/// composited source-over, which is what makes every mode reduce to
+/// [`BlendMode::Normal`] where the backdrop is transparent.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BlendMode {
+    /// Source-over. The source colour, unchanged.
+    #[default]
+    Normal,
+    /// `cb * cs`. Always darkens; white is the identity.
+    Multiply,
+    /// `1 - (1-cb)(1-cs)`. Always lightens; black is the identity.
+    Screen,
+    /// [`BlendMode::HardLight`] with the operands swapped.
+    Overlay,
+    /// The darker of the two.
+    Darken,
+    /// The lighter of the two.
+    Lighten,
+    /// Brightens the backdrop in proportion to the source.
+    ColorDodge,
+    /// Darkens the backdrop in proportion to the source.
+    ColorBurn,
+    /// Multiply or screen, chosen by the source.
+    HardLight,
+    /// A soft directional light; the smooth cousin of hard light.
+    SoftLight,
+    /// `|cb - cs|`.
+    Difference,
+    /// Difference with a lower contrast.
+    Exclusion,
+    /// The source's hue, the backdrop's saturation and luminosity.
+    Hue,
+    /// The source's saturation, the backdrop's hue and luminosity.
+    Saturation,
+    /// The source's hue and saturation, the backdrop's luminosity.
+    Color,
+    /// The source's luminosity, the backdrop's hue and saturation.
+    Luminosity,
+}
+
+/// The blend function of `mode` on straight `[0, 1]` colours.
+///
+/// Straight and not premultiplied: every formula below is stated on the colour
+/// a channel *is*, and premultiplied operands would make `multiply` depend on
+/// alpha. The caller un-premultiplies once, here and nowhere else.
+pub(crate) fn blend_rgb(mode: BlendMode, cs: [f64; 3], cb: [f64; 3]) -> [f64; 3] {
+    let per = |f: fn(f64, f64) -> f64| [0, 1, 2].map(|i| f(cs[i], cb[i]));
+    match mode {
+        BlendMode::Normal => cs,
+        BlendMode::Multiply => per(|s, b| s * b),
+        BlendMode::Screen => per(screen),
+        BlendMode::Overlay => per(|s, b| hard_light(b, s)),
+        BlendMode::Darken => per(f64::min),
+        BlendMode::Lighten => per(f64::max),
+        BlendMode::ColorDodge => per(|s, b| {
+            // The spec's three cases, in order: a black backdrop stays black
+            // whatever the source does, and a full source blows out to white
+            // rather than dividing by zero.
+            if b <= 0.0 {
+                0.0
+            } else if s >= 1.0 {
+                1.0
+            } else {
+                (b / (1.0 - s)).min(1.0)
+            }
+        }),
+        BlendMode::ColorBurn => per(|s, b| {
+            if b >= 1.0 {
+                1.0
+            } else if s <= 0.0 {
+                0.0
+            } else {
+                1.0 - ((1.0 - b) / s).min(1.0)
+            }
+        }),
+        BlendMode::HardLight => per(hard_light),
+        BlendMode::SoftLight => per(soft_light),
+        BlendMode::Difference => per(|s, b| (b - s).abs()),
+        BlendMode::Exclusion => per(|s, b| s + b - 2.0 * s * b),
+        BlendMode::Hue => set_lum(&set_sat(&cs, sat(&cb)), lum(&cb)),
+        BlendMode::Saturation => set_lum(&set_sat(&cb, sat(&cs)), lum(&cb)),
+        BlendMode::Color => set_lum(&cs, lum(&cb)),
+        BlendMode::Luminosity => set_lum(&cb, lum(&cs)),
+    }
+}
+
+fn screen(s: f64, b: f64) -> f64 {
+    s + b - s * b
+}
+
+fn hard_light(s: f64, b: f64) -> f64 {
+    if s <= 0.5 {
+        2.0 * s * b
+    } else {
+        screen(2.0 * s - 1.0, b)
+    }
+}
+
+fn soft_light(s: f64, b: f64) -> f64 {
+    let d = if b <= 0.25 {
+        ((16.0 * b - 12.0) * b + 4.0) * b
+    } else {
+        b.sqrt()
+    };
+    if s <= 0.5 {
+        b - (1.0 - 2.0 * s) * b * (1.0 - b)
+    } else {
+        b + (2.0 * s - 1.0) * (d - b)
+    }
+}
+
+/// The non-separable helpers, verbatim from the compositing specification.
+fn lum(c: &[f64; 3]) -> f64 {
+    0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2]
+}
+
+fn clip_color(c: [f64; 3]) -> [f64; 3] {
+    let l = lum(&c);
+    let n = c[0].min(c[1]).min(c[2]);
+    let x = c[0].max(c[1]).max(c[2]);
+    let mut c = c;
+    // Rotating the hue can push a channel outside [0, 1]; these two steps pull
+    // it back by scaling about the luminosity, which is the one quantity the
+    // mode promised to preserve.
+    if n < 0.0 && l > n {
+        c = c.map(|v| l + (v - l) * l / (l - n));
+    }
+    if x > 1.0 && x > l {
+        c = c.map(|v| l + (v - l) * (1.0 - l) / (x - l));
+    }
+    c
+}
+
+fn set_lum(c: &[f64; 3], l: f64) -> [f64; 3] {
+    let d = l - lum(c);
+    clip_color([c[0] + d, c[1] + d, c[2] + d])
+}
+
+fn sat(c: &[f64; 3]) -> f64 {
+    c[0].max(c[1]).max(c[2]) - c[0].min(c[1]).min(c[2])
+}
+
+fn set_sat(c: &[f64; 3], s: f64) -> [f64; 3] {
+    let n = c[0].min(c[1]).min(c[2]);
+    let x = c[0].max(c[1]).max(c[2]);
+    if x <= n {
+        return [0.0; 3];
+    }
+    // The middle channel keeps its position between the other two; the extremes
+    // go to 0 and `s`. Written as a scale rather than the spec's branch on
+    // which channel is which, which is the same map with less bookkeeping.
+    c.map(|v| (v - n) * s / (x - n))
+}
+
 /// A rectangular 8-bit RGBA raster target.
 ///
 /// Pixels are **premultiplied**, row-major from the top left, four bytes each.
@@ -180,6 +341,21 @@ impl Pixmap {
         rule: FillRule,
         clip: Option<&Clip>,
     ) {
+        self.fill_path_blend(path, paint, rule, clip, BlendMode::Normal);
+    }
+
+    /// [`Pixmap::fill_path_with`], combining with the backdrop through `mode`.
+    ///
+    /// The general form. `BlendMode::Normal` is the same arithmetic the other
+    /// two entry points do, not a special case around it.
+    pub fn fill_path_blend(
+        &mut self,
+        path: &[PathEl],
+        paint: &Paint,
+        rule: FillRule,
+        clip: Option<&Clip>,
+        mode: BlendMode,
+    ) {
         // An empty clip costs nothing: not even the flattening below.
         let rows = match clip {
             Some(c) => {
@@ -238,10 +414,62 @@ impl Pixmap {
                     }
                 };
                 let i = row + x * 4;
-                blend(&mut self.data[i..i + 4], src, cov, noise);
+                blend(&mut self.data[i..i + 4], src, cov, noise, mode);
             }
         }
     }
+
+    /// Composites `src` over this pixmap at `alpha`, through `mode`.
+    ///
+    /// This is what an **isolated group** is: its members composite onto a
+    /// transparent pixmap of their own, and the finished result arrives here as
+    /// one source. Isolation is the whole difference -- a member's blend mode
+    /// sees only what the group drew, never what is underneath it.
+    ///
+    /// Panics on a size mismatch, which would otherwise shear the group by a
+    /// row.
+    pub fn composite(&mut self, src: &Pixmap, mode: BlendMode, alpha: f64) {
+        assert!(
+            src.width == self.width && src.height == self.height,
+            "group is {}x{} but the pixmap is {}x{}",
+            src.width,
+            src.height,
+            self.width,
+            self.height
+        );
+        let alpha = alpha.clamp(0.0, 1.0);
+        for (d, s) in self.data.chunks_exact_mut(4).zip(src.data.chunks_exact(4)) {
+            if s[3] == 0 {
+                continue;
+            }
+            let premul = [0, 1, 2, 3].map(|i| f64::from(s[i]) * alpha);
+            blend(d, premul, 1.0, 0.0, mode);
+        }
+    }
+}
+
+/// The straight edges `path` fills as, each `[ax, ay, bx, by]` **in the
+/// direction the path runs through it** -- which is what the winding number
+/// counts.
+///
+/// Public because the GPU renderer (#19) has to flatten the same path into the
+/// same edges. Two flatteners at two tolerances, or two rules about which
+/// degenerate edges to drop, would put a difference into every diff against
+/// this oracle that is not the difference the diff exists to find. This is the
+/// one function that stops that, so it is the one piece of the fill internals
+/// that is public.
+pub fn fill_edges(path: &[PathEl]) -> Vec<[f64; 4]> {
+    build_edges(path)
+        .iter()
+        .map(|e| {
+            let (a, b) = if e.dir == 1 {
+                (e.top, e.bot)
+            } else {
+                (e.bot, e.top)
+            };
+            [a.x, a.y, b.x, b.y]
+        })
+        .collect()
 }
 
 /// The half-open range of pixel rows `edges` can touch, clamped to `height`.
@@ -406,12 +634,13 @@ fn add_span(acc: &mut [f64], a: f64, b: f64, weight: f64) {
 /// `src` is on the same 0..=255 scale as the destination bytes, so the whole
 /// operation is `src * coverage + dst * (1 - alpha * coverage)` -- one multiply
 /// and no divide, which is the entire reason the buffer is premultiplied.
-fn blend(dst: &mut [u8], src: [f64; 4], coverage: f64, dither: f64) {
+fn blend(dst: &mut [u8], src: [f64; 4], coverage: f64, dither: f64, mode: BlendMode) {
     // Clamped because two spans meeting exactly inside a pixel can sum to an
     // ulp over one. Unclamped that makes the blend below a slightly *more* than
     // convex combination, which can brighten a pixel past the colour it was
     // filled with -- invisible in a byte, but this is an oracle and P2 diffs it.
     let cov = coverage.clamp(0.0, 1.0);
+    let src = mix_with_backdrop(src, dst, mode);
     // `src[3]` is the source alpha: premultiplying leaves that channel alone.
     let inv = 1.0 - src[3] * cov / 255.0;
     for (d, s) in dst.iter_mut().zip(src) {
@@ -429,6 +658,33 @@ fn blend(dst: &mut [u8], src: [f64; 4], coverage: f64, dither: f64) {
         dst[0] <= dst[3] && dst[1] <= dst[3] && dst[2] <= dst[3],
         "unpremultiplied pixel {dst:?}"
     );
+}
+
+/// The source colour a blend mode actually contributes, still premultiplied on
+/// the 0..=255 scale so that [`blend`] above is unchanged by the existence of
+/// modes at all.
+///
+/// `cs' = (1 - ab) cs + ab B(cb, cs)`: where the backdrop is transparent there
+/// is nothing to blend with and the plain source survives, which is why
+/// `Normal` and "no backdrop" are the same answer and why every mode agrees on
+/// an empty canvas.
+fn mix_with_backdrop(src: [f64; 4], dst: &[u8], mode: BlendMode) -> [f64; 4] {
+    let ab = f64::from(dst[3]) / 255.0;
+    // Nothing to blend against, or nothing to blend: both leave `cs` alone, and
+    // both would divide by zero below.
+    if mode == BlendMode::Normal || ab <= 0.0 || src[3] <= 0.0 {
+        return src;
+    }
+    let cs = [0, 1, 2].map(|i| src[i] / src[3]);
+    let cb = [0, 1, 2].map(|i| f64::from(dst[i]) / f64::from(dst[3]));
+    let b = blend_rgb(mode, cs, cb);
+    let mut out = src;
+    for i in 0..3 {
+        // Back to premultiplied: a straight channel times the source alpha,
+        // which is what `src` already carries in slot 3.
+        out[i] = ((1.0 - ab) * cs[i] + ab * b[i]).clamp(0.0, 1.0) * src[3];
+    }
+    out
 }
 
 #[cfg(test)]
