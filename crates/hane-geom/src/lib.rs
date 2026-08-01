@@ -14,6 +14,7 @@
 
 mod affine;
 mod curve;
+pub mod fuzz;
 mod path;
 mod rect;
 mod vec2;
