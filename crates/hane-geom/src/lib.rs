@@ -17,6 +17,7 @@ mod arclen;
 mod bbox;
 mod curve;
 pub mod fuzz;
+mod nearest;
 mod path;
 mod rect;
 mod split;
