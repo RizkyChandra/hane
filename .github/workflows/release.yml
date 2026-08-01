@@ -1,0 +1,58 @@
+name: release
+
+# Releases are cut from `main` on a `v*` tag. Day-to-day work lands on `dev`;
+# `main` only moves when a release is being made.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # GoReleaser builds the changelog from git history.
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # The gates run here too. A tag must never produce a release from a tree
+      # that would have failed CI.
+      - name: Zero-dependency check (D-001)
+        run: python3 scripts/check-zero-deps.py
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Build wasm
+        run: |
+          cargo build --release --target wasm32-unknown-unknown -p hane-wasm
+          mkdir -p web/public
+          cp target/wasm32-unknown-unknown/release/hane_wasm.wasm web/public/hane.wasm
+          ls -l web/public/hane.wasm
+
+      - name: Build web bundle
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
