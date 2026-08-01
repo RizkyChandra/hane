@@ -14,9 +14,12 @@
 
 mod affine;
 mod arclen;
+mod bbox;
 mod curve;
+pub mod fuzz;
 mod path;
 mod rect;
+mod split;
 mod vec2;
 
 pub use affine::Affine;
