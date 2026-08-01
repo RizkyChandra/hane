@@ -58,3 +58,12 @@ body {
   width: 100%;
   height: 100%;
 }
+
+/* Engine status, written by main.ts. Monospace because it is numbers in
+   columns, and the columns are the point. */
+#status {
+  padding: 10px 12px;
+  font: 11px/1.55 ui-monospace, monospace;
+  white-space: pre;
+  overflow-x: auto;
+}

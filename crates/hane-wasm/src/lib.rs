@@ -1,16 +1,23 @@
 //! The browser boundary: raw wasm exports the JS shell calls into.
 //!
-//! # Why raw exports and not `wasm-bindgen`
+//! # Two export styles, on purpose
 //!
-//! D-001 permits `wasm-bindgen` and `web-sys` here, and P2 will need them for
-//! the WebGL context and event plumbing. But everything exposed at P0 is
-//! numbers in and numbers out, where `wasm-bindgen` buys nothing and costs a
-//! `wasm-bindgen-cli` step in the release pipeline. So: plain `extern "C"` for
-//! now.
+//! P0 said: everything exposed is numbers in and numbers out, where
+//! `wasm-bindgen` buys nothing and costs a `wasm-bindgen-cli` step in the
+//! release pipeline, so plain `extern "C"` -- and bring wasm-bindgen in when
+//! strings, buffers or objects have to cross, P2's GL context being the likely
+//! trigger.
 //!
-//! ponytail: raw scalar exports only, no shared-memory protocol. Bring in
-//! wasm-bindgen when strings, buffers or objects have to cross -- P2's GL
-//! context is the likely trigger.
+//! That trigger has fired. #17 needs a `WebGl2RenderingContext`, extension
+//! names and a console line -- objects and strings, none of which cross a raw
+//! `extern "C"` boundary without hand-rolling the marshalling wasm-bindgen
+//! already generates. So `glctx` is `#[wasm_bindgen]` and the P0 exports below
+//! stay `extern "C"`: wasm-bindgen emits both in one module, and rewriting
+//! working scalar exports would buy nothing.
+//!
+//! The cost is real and is now paid: the build has a `wasm-bindgen` CLI step
+//! and the shell loads generated glue instead of instantiating the `.wasm`
+//! directly.
 //!
 //! # What this proves
 //!
@@ -18,6 +25,8 @@
 //! boundary, so a release artifact that answers correctly has proved the whole
 //! toolchain end to end: cargo, the `wasm32-unknown-unknown` target, `f64`
 //! maths under wasm, and the JS loader.
+
+pub mod glctx;
 
 use hane_geom::{CubicBez, Point};
 

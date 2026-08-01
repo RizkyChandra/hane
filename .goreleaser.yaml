@@ -70,7 +70,7 @@ release:
     python3 -m http.server -d . 8080
     ```
 
-    Then open <http://localhost:8080>. The page loads `hane.wasm` and reports
+    Then open <http://localhost:8080>. The page loads `hane_bg.wasm` and reports
     the engine version and a flattening result, which is what proves the
     toolchain end to end.
 
