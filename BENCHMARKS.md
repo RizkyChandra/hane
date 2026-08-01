@@ -603,3 +603,96 @@ sixteen lines. It is bit-exact, and the tolerance came back down to the default.
   whoever adds one.
 - **Deep clip nesting and deep groups.** The corpus goes three clips deep and one group deep. The
   documented bounds are 8 and 4.
+
+---
+
+## The second backend: WebGPU against WebGL2 (#24, D-012)
+
+```sh
+cargo build --release --target wasm32-unknown-unknown -p hane-wasm
+wasm-bindgen --target web --out-dir web/public --out-name hane \
+    target/wasm32-unknown-unknown/release/hane_wasm.wasm
+cd web && npm ci && npm run build && cd ..
+python3 scripts/gpu-diff.py --browser chromium --backend webgpu --bench 3
+cargo test -p hane-gpu --test oracle_diff
+```
+
+Two questions, in this order: does the second backend reproduce the oracle, and is it faster.
+
+### Correctness first
+
+Same corpus, same comparator, same tolerance table -- `oracle_diff.rs` cannot tell which backend
+wrote the bytes it is reading, which is the only way "the second backend matches the first" means
+anything.
+
+| backend | browser, adapter | fixtures | bit-exact | worst max | worst mean |
+|---|---|---:|---:|---:|---:|
+| WebGL2 | Chromium 150, ANGLE on SwiftShader | 41 | 31 | 1 | 0.0060 |
+| WebGL2 | Firefox 153, software WebGL | 41 | 29 | 1 | 0.0114 |
+| **WebGPU** | Chromium 150, Dawn on SwiftShader | 41 | **33** | **1** | **0.0060** |
+| **WebGPU** | Firefox 153, wgpu | 41 | **30** | **1** | **0.0114** |
+
+Both WebGL2 rows were re-measured for this comparison rather than copied: Firefox comes back at
+29 bit-exact where #19 recorded 30, one fixture having moved across a `1/255` boundary between
+browser builds. Every other number is unchanged, and no fixture left the tolerance.
+
+WebGPU is bit-exact on *two more* fixtures than WebGL2 in Chromium, which is
+not luck: the GL path rounds a coverage composite to `floor(v + 0.5)`, divides by 255 and lets the
+driver write it back through a unorm8 texture, while the compute path packs the byte itself and
+stores it. One round trip removed is one place a difference cannot appear.
+
+The eight Chromium fixtures that still differ by one count are the ones with an anti-aliased edge
+whose coverage lands on a `1/255` boundary -- `figure_eight` and its even-odd twin worst, at a
+mean of 0.006 over the whole image.
+
+`extreme_coords` is excluded for the WebGPU backend for exactly the reason it is excluded for
+WebGL2: `f32` has a 64-pixel quantum at 1e9 and no shading language changes that (D-004).
+
+### Speed, and what the corpus can actually measure
+
+One session, both backends, the same 42 fixtures, median of 3 passes:
+
+| browser | WebGL2 | WebGPU |
+|---|---:|---:|
+| Chromium 150, SwiftShader | 2875 ms | **390 ms** |
+| Firefox 153, software | **340 ms** | 4205 ms |
+
+Those numbers disagree about which backend is faster, and both are right, because **neither is
+measuring rasterization**. Timing four fixtures individually says why:
+
+| fixture | Chromium WebGPU | Chromium WebGL2 | Firefox WebGPU | Firefox WebGL2 |
+|---|---:|---:|---:|---:|
+| `rect_pixel_aligned`, 64x64 | 2.4 ms | 64 ms | 100 ms | 11 ms |
+| `tiny_canvas`, **1x1** | 2.4 ms | 65 ms | 99 ms | 4 ms |
+| `blend_isolated_group` | 41 ms | 86 ms | 99 ms | 7 ms |
+
+A **one-pixel** canvas costs Chromium's WebGL2 backend 65 ms and Firefox's WebGPU backend 100 ms.
+Neither number can be pixels:
+
+- **Chromium's WebGL2 cost is compilation.** `glrender.rs` builds its three GLSL programs per
+  render, and translating them through ANGLE onto SwiftShader is most of a scene.
+- **Firefox's WebGPU cost is a fixed round trip.** It is 100 ms for every scene, whatever the
+  scene, and it does not move when the pipeline is cached -- the shape of a readback that waits
+  for a device poll, not of work. This harness maps the framebuffer back to the CPU after every
+  single render, which is the worst case for it and is not what a frame loop does.
+
+WebGPU caches its pipeline across renders because nothing in it depends on the scene, and doing so
+took the Chromium corpus pass from 7054 ms to 390 ms -- 95% of the original was compiling one
+shader forty-two times. The GL backend still rebuilds its programs per render, so the two columns
+above are not like for like, and the honest symmetric pair is the *uncached* one: 7054 ms WebGPU
+against 2875 ms WebGL2, where Dawn's WGSL-to-SPIR-V is slower than ANGLE's GLSL-to-SPIR-V.
+
+### Things these numbers do not cover
+
+- **Steady-state throughput of either rasterizer.** This corpus is 42 independent scenes rendered
+  once each and read back; it measures setup and readback, and both dominate. The comparison that
+  matters -- one scene, many frames, nothing mapped -- belongs with the first real frame loop, and
+  so does caching the GL programs the way WebGPU caches its pipeline.
+- **A hardware adapter.** Chromium ran Dawn on Vulkan-SwiftShader and Firefox ran wgpu in
+  software. Both are conformant implementations and the *arithmetic* is what the correctness table
+  is about, but nothing here says what a discrete GPU does with a 256-invocation workgroup.
+- **Large canvases.** Every fixture is at most 64x64. A tiled compute dispatch is exactly the
+  shape that should pull ahead as the canvas grows, and that is untested.
+- **Firefox on a machine without the pref.** `dom.webgpu.enabled` is set by `scripts/gpu-diff.py`
+  in the throwaway profile. Firefox 153 on Linux does not enable WebGPU by default, which is why
+  automatic selection has to fall back rather than assume.

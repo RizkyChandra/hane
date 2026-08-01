@@ -29,13 +29,17 @@ hane-edit.workspace = true
 hane-text.workspace = true
 wasm-bindgen = "0.2"
 
-# D-010: this crate holds the GL context. The feature list is the exact set of
-# bindings the P2 probe touches -- web-sys generates code per feature, so an
-# unused one is dead weight in every .wasm we ship.
+# D-010: this crate holds the GL and WebGPU contexts. The feature list is the
+# exact set of bindings the two backends touch -- web-sys generates code per
+# feature, so an unused one is dead weight in every .wasm we ship.
+#
+# The `Gpu*` half additionally needs `--cfg=web_sys_unstable_apis`, which
+# `.cargo/config.toml` sets for the whole workspace; see the comment there.
 web-sys = { version = "0.3", features = [
     "Event",
     "EventTarget",
     "HtmlCanvasElement",
+    "Navigator",
     "WebGl2RenderingContext",
     "WebGlBuffer",
     "WebGlFramebuffer",
@@ -43,7 +47,35 @@ web-sys = { version = "0.3", features = [
     "WebGlShader",
     "WebGlTexture",
     "WebGlUniformLocation",
+    "Window",
     "console",
+    "Gpu",
+    "GpuAdapter",
+    "GpuAdapterInfo",
+    "GpuAutoLayoutMode",
+    "GpuBindGroup",
+    "GpuBindGroupDescriptor",
+    "GpuBindGroupEntry",
+    "GpuBindGroupLayout",
+    "GpuBuffer",
+    "GpuBufferBinding",
+    "GpuBufferDescriptor",
+    "GpuCommandBuffer",
+    "GpuCommandEncoder",
+    "GpuComputePassEncoder",
+    "GpuComputePipeline",
+    "GpuComputePipelineDescriptor",
+    "GpuDevice",
+    "GpuError",
+    "GpuErrorFilter",
+    "GpuProgrammableStage",
+    "GpuQueue",
+    "GpuShaderModule",
+    "GpuShaderModuleDescriptor",
 ] }
-# Only for building the getContext attribute object; see `glctx.rs`.
+# Only for building the getContext attribute object and the typed arrays the
+# two backends upload; see `glctx.rs` and `wgpurender.rs`.
 js-sys = "0.3"
+# WebGPU is asynchronous down to the adapter request, so the render entry points
+# are `async fn` -- which wasm-bindgen turns into a Promise through this crate.
+wasm-bindgen-futures = "0.4"
