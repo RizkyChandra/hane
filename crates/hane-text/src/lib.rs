@@ -4,3 +4,4 @@
 
 pub mod opentype;
 mod outline;
+pub mod to_path;
