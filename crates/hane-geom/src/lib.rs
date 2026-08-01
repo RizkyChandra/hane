@@ -13,6 +13,7 @@
 //! once, at the GPU buffer boundary in `hane-gpu`, and nowhere else.
 
 mod affine;
+mod arclen;
 mod curve;
 mod path;
 mod rect;
