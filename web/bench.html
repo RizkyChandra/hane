@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>hane — P3 gate benchmark</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <!-- No canvas: there is no renderer to draw into one yet (P2). The page
+         drives the engine's frame loop and reports what it costs. -->
+    <main id="bench">
+      <h1>hane — P3 gate</h1>
+      <p id="status">loading…</p>
+      <pre id="out"></pre>
+    </main>
+    <script type="module" src="/src/bench.ts"></script>
+  </body>
+</html>

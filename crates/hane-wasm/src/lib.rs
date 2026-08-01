@@ -19,6 +19,8 @@
 //! toolchain end to end: cargo, the `wasm32-unknown-unknown` target, `f64`
 //! maths under wasm, and the JS loader.
 
+pub mod bench;
+
 use hane_geom::{CubicBez, Point};
 
 /// The engine version, as `major * 10000 + minor * 100 + patch`.
