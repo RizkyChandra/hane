@@ -13,11 +13,13 @@
 //! once, at the GPU buffer boundary in `hane-gpu`, and nowhere else.
 
 mod affine;
+mod curve;
 mod path;
 mod rect;
 mod vec2;
 
 pub use affine::Affine;
+pub use curve::{CubicBez, QuadBez};
 pub use path::PathEl;
 pub use rect::Rect;
 pub use vec2::{Point, Vec2};
