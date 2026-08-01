@@ -182,6 +182,44 @@ impl Document {
         Some(previous)
     }
 
+    /// Replaces the shape's outline, returning the path it had.
+    ///
+    /// The counterpart of [`set_transform`](Document::set_transform) for the
+    /// node tool, and returning the old value for the same reason: the command
+    /// that undoes an edit puts these elements back verbatim rather than
+    /// recomputing them from the edit, which f64 cannot do exactly.
+    pub fn set_path(&mut self, id: NodeId, path: Path) -> Option<Path> {
+        let entry = self.shapes.get_mut(id)?;
+        let previous = core::mem::replace(&mut entry.shape.path, path);
+        let old = entry.bounds;
+        entry.bounds = entry.shape.bounds();
+        let new = entry.bounds;
+        self.index.update(id.to_bits(), old, new);
+        Some(previous)
+    }
+
+    /// Every shape in paint order, furthest from the viewer first.
+    ///
+    /// This is the order a renderer paints in and a serialiser writes out, and
+    /// it is total: no two shapes share a `z`, so it is the same order twice
+    /// running and the same after a save and a load.
+    #[must_use]
+    pub fn z_order(&self) -> Vec<NodeId> {
+        let mut ids: Vec<(u32, NodeId)> = self.shapes.iter().map(|(id, e)| (e.z, id)).collect();
+        ids.sort_unstable();
+        ids.into_iter().map(|(_, id)| id).collect()
+    }
+
+    /// Sets the paint order of one shape, returning the one it had.
+    pub(crate) fn set_z(&mut self, id: NodeId, z: u32) -> Option<u32> {
+        let entry = self.shapes.get_mut(id)?;
+        let previous = core::mem::replace(&mut entry.z, z);
+        // Keeps the next insertion on top of everything, including a shape
+        // just sent to the front.
+        self.next_z = self.next_z.max(z.saturating_add(1));
+        Some(previous)
+    }
+
     /// The number of shapes.
     #[must_use]
     pub fn len(&self) -> usize {
