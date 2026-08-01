@@ -53,6 +53,7 @@ version = "1.0.0"
 dependencies = [
  "hane-geom",
  "hane-path",
+ "hane-scene",
 ]
 
 [[package]]

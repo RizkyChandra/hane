@@ -5,6 +5,7 @@
 mod clip;
 mod fill;
 mod paint;
+pub mod png;
 
 pub use clip::Clip;
 pub use fill::{Color, FillRule, Pixmap};
