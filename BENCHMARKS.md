@@ -142,6 +142,143 @@ was specified for, and nowhere else.
 
 ---
 
+## Tile binning: what should `TILE_SIZE` be? (#18)
+
+```sh
+cargo run --release --example bin_bench
+```
+
+**Verdict: 16 px, and the honest version is that 8 and 16 are within 10% of each other.** The
+combined model bottoms out at 8 for dense scenes and at 16 for sparse ones, which is a tie. 16
+wins it on the two costs the model does not see: it emits half as many bin entries to upload
+per frame, and it has a quarter as many tiles for the P3 cache and for whatever per-tile state
+D-003 forces on a WebGL2 rasterizer. 4 px and 32 px and up are not close.
+
+Only half of the trade-off is measurable without a GPU, and the two halves point opposite ways:
+
+- **Binning, measured.** Falls monotonically as tiles grow -- a bigger tile means fewer
+  `(tile, segment)` entries per segment and a smaller grid to sweep. On its own it says "128".
+- **Fill, modelled.** WebGL2 has no compute shaders (D-003), so a tile is drawn by running its
+  whole segment list over its whole pixel area: `entries * size^2` segment-pixels. It rises
+  with the tile, because a bigger tile pulls in segments that miss most of its pixels. On its
+  own it says "4".
+
+The `sum` column adds the two normalised at the 16 px point. That weighting is a choice, not a
+measurement, and it is the weakest number on this page -- which is exactly why the 8-vs-16 call
+was made on entry count and tile count instead.
+
+### What was measured
+
+- **Scene.** Closed 8-segment blobs, 8 to 200 px across, scattered over a 1920x1080 artboard: a
+  third lines, a third quadratics, a third cubics. That is what an illustration looks like after
+  culling -- many small shapes rather than a few screen-spanning ones. A screen-spanning path is
+  the case where the tile size stops mattering, since it lands in every tile whatever the size.
+- **Flattening tolerance** 0.5 device px, the same one a rasterizer would draw with. Bins are
+  exact for the polyline a curve flattens to, so the two have to agree.
+- **Segment counts** 1k, 10k and 50k. 50k covers every one of the 8160 tiles at 16 px; it is the
+  pessimistic end, not the expected one.
+- **`entries`** is the total `(tile, segment)` pairs -- the size of the buffer that goes to the
+  GPU. **`non-empty tiles`** is the number of tiles anything is drawn into; empty tiles are not
+  in the output at all and cost nothing downstream.
+
+Machine and build as above: AMD Ryzen 9 9950X3D, `opt-level = 3`, `lto = true`. Two full runs
+produced byte-identical bins and timings within 3%.
+
+### 1000 segments
+
+| tile | bin (us) | entries | entries/seg | non-empty tiles | segs/tile | segment-pixels (model) |
+|---:|---:|---:|---:|---:|---:|---:|
+| 4 | 632.8 | 33331 | 33.33 | 22026 | 1.51 | 0.5M |
+| 8 | 369.2 | 16642 | 16.64 | 9029 | 1.84 | 1.1M |
+| 16 | 190.1 | 8512 | 8.51 | 3499 | 2.43 | 2.2M |
+| 32 | 168.5 | 4546 | 4.55 | 1259 | 3.61 | 4.7M |
+| 64 | 160.4 | 2597 | 2.60 | 410 | 6.33 | 10.6M |
+| 128 | 157.7 | 1755 | 1.75 | 127 | 13.82 | 28.8M |
+
+Flattening alone: 73.6 us for 9414 polyline points. Relative to 16 px, lower is better:
+
+| tile | bin cost | fill cost (model) | sum |
+|---:|---:|---:|---:|
+| 4 | 3.33x | 0.24x | 3.57x |
+| 8 | 1.94x | 0.49x | 2.43x |
+| 16 | 1.00x | 1.00x | **2.00x** |
+| 32 | 0.89x | 2.14x | 3.02x |
+| 64 | 0.84x | 4.88x | 5.73x |
+| 128 | 0.83x | 13.20x | 14.03x |
+
+### 10000 segments
+
+| tile | bin (us) | entries | entries/seg | non-empty tiles | segs/tile | segment-pixels (model) |
+|---:|---:|---:|---:|---:|---:|---:|
+| 4 | 5408.8 | 312513 | 31.25 | 106521 | 2.93 | 5.0M |
+| 8 | 3767.7 | 156655 | 15.67 | 30763 | 5.09 | 10.0M |
+| 16 | 2849.2 | 80154 | 8.02 | 8095 | 9.90 | 20.5M |
+| 32 | 2318.5 | 42787 | 4.28 | 2040 | 20.97 | 43.8M |
+| 64 | 1995.4 | 24772 | 2.48 | 510 | 48.57 | 101.5M |
+| 128 | 1769.3 | 16744 | 1.67 | 135 | 124.03 | 274.3M |
+
+Flattening alone: 758.9 us for 91994 polyline points. Relative to 16 px, lower is better:
+
+| tile | bin cost | fill cost (model) | sum |
+|---:|---:|---:|---:|
+| 4 | 1.90x | 0.24x | 2.14x |
+| 8 | 1.32x | 0.49x | **1.81x** |
+| 16 | 1.00x | 1.00x | 2.00x |
+| 32 | 0.81x | 2.14x | 2.95x |
+| 64 | 0.70x | 4.94x | 5.65x |
+| 128 | 0.62x | 13.37x | 13.99x |
+
+### 50000 segments
+
+| tile | bin (us) | entries | entries/seg | non-empty tiles | segs/tile | segment-pixels (model) |
+|---:|---:|---:|---:|---:|---:|---:|
+| 4 | 27013.0 | 1570916 | 31.42 | 129548 | 12.13 | 25.1M |
+| 8 | 19581.0 | 786995 | 15.74 | 32400 | 24.29 | 50.4M |
+| 16 | 14822.1 | 403080 | 8.06 | 8160 | 49.40 | 103.2M |
+| 32 | 12094.5 | 215022 | 4.30 | 2040 | 105.40 | 220.2M |
+| 64 | 10287.8 | 124760 | 2.50 | 510 | 244.63 | 511.0M |
+| 128 | 9359.7 | 84554 | 1.69 | 135 | 626.33 | 1385.3M |
+
+Flattening alone: 4110.2 us for 459732 polyline points. Relative to 16 px, lower is better:
+
+| tile | bin cost | fill cost (model) | sum |
+|---:|---:|---:|---:|
+| 4 | 1.82x | 0.24x | 2.07x |
+| 8 | 1.32x | 0.49x | **1.81x** |
+| 16 | 1.00x | 1.00x | 2.00x |
+| 32 | 0.82x | 2.13x | 2.95x |
+| 64 | 0.69x | 4.95x | 5.65x |
+| 128 | 0.63x | 13.43x | 14.06x |
+
+### How the numbers scale
+
+**Binning is linear in the entries it emits, not in the segments it is given.** Entries per
+segment is a property of the tile size and the scene alone -- 8.0 at 16 px at every count
+measured, 31.3 at 4 px, 1.7 at 128 px -- so the entry column is stable across `n` and the time
+column tracks it. At 16 px that is 190us for 1k, 2.85ms for 10k, 14.8ms for 50k: roughly 285ns
+per segment or 36ns per entry, flat.
+
+**About a quarter of it is flattening**, which is work the rasterizer needs done anyway and is
+identical at every tile size. It is the floor the bin column cannot fall below however big the
+tiles get, which is most of why 128 px is only 1.6x faster than 16 px rather than 5x.
+
+**The per-frame budget is the finding, not the tile size.** `PLAN.md` allows 16ms p99. 10k
+visible segments costs 2.85ms, 18% of the frame, before a single pixel is filled. 50k costs
+14.8ms and blows it outright. Binning is not something to run from scratch every frame at that
+scale, which is the whole argument for the P3 tile cache: re-bin what moved, keep the rest.
+
+### Things these numbers do not cover
+
+- **Fill is a model, not a measurement.** `entries * size^2` assumes a tile costs its whole
+  pixel area per binned segment. A rasterizer that bounds each segment inside the tile first
+  would flatten that curve and push the answer towards smaller tiles.
+- **Draw submission is not counted at all.** If the rasterizer ends up one draw per non-empty
+  tile rather than one instanced draw for all of them, the tile column moves the answer up, not
+  down: 30763 draws at 8 px against 8095 at 16 px, at 10k segments.
+- One thread, one artboard size, one flattening tolerance. Zooming in raises the segment count
+  per tile without raising the segment count, which this does not separate.
+- Uniform scatter. A document with everything piled into one corner leaves most tiles empty and
+  the rest saturated; the correctness tests cover it, the benchmark does not.
 ## Viewport culling and the tile cache (#28, #30)
 
 ```sh
