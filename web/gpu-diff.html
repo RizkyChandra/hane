@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>hane — GPU/oracle diff</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <main id="bench">
+      <h1>hane — GPU render dump</h1>
+      <p id="status">loading…</p>
+      <!-- The canvas exists only to own the WebGL2 context; every fixture is
+           rendered into an offscreen target and read back, so nothing is ever
+           presented here. -->
+      <canvas id="gl" width="64" height="64"></canvas>
+      <pre id="out"></pre>
+    </main>
+    <script type="module" src="/src/gpu-diff.ts"></script>
+  </body>
+</html>

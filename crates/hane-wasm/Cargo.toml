@@ -37,6 +37,12 @@ web-sys = { version = "0.3", features = [
     "EventTarget",
     "HtmlCanvasElement",
     "WebGl2RenderingContext",
+    "WebGlBuffer",
+    "WebGlFramebuffer",
+    "WebGlProgram",
+    "WebGlShader",
+    "WebGlTexture",
+    "WebGlUniformLocation",
     "console",
 ] }
 # Only for building the getContext attribute object; see `glctx.rs`.

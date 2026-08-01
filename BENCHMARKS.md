@@ -539,3 +539,67 @@ it, which is the obvious next lever and is not built.
 - **Memory is not budgeted.** 500k shapes is ~128 MiB of control points in linear memory before
   the tile cache's 64 MiB, and nothing here measures what the browser does when a real document
   is that size.
+
+---
+
+## Which rasterizer the GPU should run (#19, D-003)
+
+WebGL2 has no compute shaders, so D-003 left the shape of the rasterizer open: stencil-then-cover
+or coverage computed in a fragment shader. This is the measurement that closed it, and it is not
+a timing -- it is a per-pixel diff against the CPU oracle, because that is what the acceptance
+criterion asks for and because a fast renderer that cannot match the oracle is not a candidate at
+all.
+
+### What was measured
+
+`python3 scripts/gpu-diff.py` renders all 42 corpus fixtures through the real renderer in a
+headless browser and POSTs the framebuffers back; `cargo test -p hane-gpu --test oracle_diff`
+compares them against `hane-raster`'s committed goldens with `hane_raster::diff` -- the same
+comparator the CPU harness uses, so one rule judges both sides (D-002).
+
+Chromium runs on SwiftShader, Firefox on its software WebGL backend. Neither is a GPU. That is
+fine and deliberate: both are conformant WebGL2 implementations and the thing under test is the
+*arithmetic*, not the silicon. A driver difference would show up as a handful of edge pixels, and
+the table below is how you would see it.
+
+### The three candidates, before any code
+
+| approach | worst case on this corpus |
+|---|---|
+| Signed-area accumulation, `min(abs(a), 1)` | integrates the *winding* over a pixel, not the coverage. Equal only where the winding is 0 or 1; at each of `pentagram`'s five crossing vertices a winding-2 sector meets a winding-0 one inside one pixel and the answer is out by up to a quarter of a pixel -- **~60 counts**. |
+| Stencil-then-cover | exact about the winding, and has no anti-aliasing at all without MSAA. `glctx.rs` sets `antialias: false` on purpose, because a second differently-quantised AA puts the output permanently out of the oracle's reach. |
+| Fragment-shader coverage running the oracle's own loop | sixteen sample lines per pixel, sorted crossings, analytic horizontal spans -- the same computation in `f32`. |
+
+### The third one, measured
+
+| | fixtures compared | bit-exact | worst max | worst mean |
+|---|---:|---:|---:|---:|
+| Chromium 150, `--use-gl=swiftshader` | 41 | 31 | 1 | 0.0060 |
+| Firefox 153, software WebGL | 41 | 30 | 1 | 0.0114 |
+
+One count out of 255 is the smallest difference a byte can hold. Every fixture the corpus exists
+to catch a GPU on passes bit-exactly: `seam_shared_edge` (the conflation artifact, which needs one
+draw per fill and not one accumulation buffer), `tile_boundary_rects`, `nested_triangles`
+(winding 3), `pentagram` (winding 2), and both annuli -- identical geometry, opposite correct
+answer.
+
+`sliver_rows` is worth naming. #20 gave it max 24 on the reasoning that a GPU computing coverage
+analytically would get the *right* answer where the oracle's sixteen sample lines get a quantised
+one. The reasoning was sound; the premise turned out false, because this renderer samples the same
+sixteen lines. It is bit-exact, and the tolerance came back down to the default.
+
+### Things these numbers do not cover
+
+- **Speed.** Nothing here is timed. The shader sorts crossings per pixel per sample line, which is
+  more work per fragment than either alternative; the tile binning is what pays for it and neither
+  has been measured against a frame budget. P2's own gate is correctness; the timing belongs with
+  the first real frame loop.
+- **A hardware driver.** Both browsers rasterized in software. A real GPU may reorder the
+  floating-point contractions in the coverage loop (`fma`), which is exactly the kind of change
+  that moves an edge pixel by one count -- inside the table's bound, but unverified.
+- **`extreme_coords`.** Rendered and compared, it comes back at max 215, mean 38.5, and is
+  excluded from the corpus for that reason. Its vertices are at 1e9, where an `f32` has a 64-pixel
+  quantum (D-004). The fix is a view transform applied before the narrowing, and it belongs to
+  whoever adds one.
+- **Deep clip nesting and deep groups.** The corpus goes three clips deep and one group deep. The
+  documented bounds are 8 and 4.
