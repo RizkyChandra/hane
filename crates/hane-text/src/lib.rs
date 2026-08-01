@@ -3,3 +3,4 @@
 //! Phase P8. See `docs/PLAN.md`.
 
 pub mod opentype;
+mod outline;
