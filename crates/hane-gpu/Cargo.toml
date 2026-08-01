@@ -13,3 +13,10 @@ workspace = true
 hane-geom.workspace = true
 hane-path.workspace = true
 hane-scene.workspace = true
+# D-002: the GPU renderer is judged against the CPU rasterizer, so it has to
+# speak the same vocabulary -- the same `Scene`, `Paint`, `FillRule` and
+# `BlendMode`, and above all the same flattener (`fill_edges`). A second copy of
+# any of them here would put a difference into every diff that is not the
+# difference the diff exists to find. Still no dependency outside the workspace
+# (D-001), and still no GL call (D-010).
+hane-raster.workspace = true

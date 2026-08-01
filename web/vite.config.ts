@@ -14,5 +14,17 @@ export default defineConfig({
     // tree is the one shape that survives archiving without the HTML's
     // relative references breaking.
     assetsDir: "",
+    rollupOptions: {
+      // Two pages: the shell, and the P3 gate benchmark (#31). The benchmark
+      // ships in the bundle rather than living in a scratch directory so the
+      // gate can be re-run against any release artifact, on any machine, which
+      // is the only way "this must never silently regress" means anything.
+      // A third page, `gpu-diff.html`, dumps the GPU render of every corpus
+      // fixture for `scripts/gpu-diff.py` to compare against the P1 oracle
+      // (D-002). Same reasoning: it ships in the bundle so the comparison can
+      // be re-run against any release artifact rather than only from a source
+      // tree.
+      input: { main: "index.html", bench: "bench.html", gpuDiff: "gpu-diff.html" },
+    },
   },
 });

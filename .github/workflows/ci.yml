@@ -44,11 +44,25 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
+      # wasm-bindgen's CLI and its crate must be the same version or the
+      # generated glue does not match the module's custom sections. Read it from
+      # Cargo.lock so a `cargo update` cannot silently desync them.
+      - name: wasm-bindgen version
+        id: wb
+        run: |
+          v=$(sed -n '/^name = "wasm-bindgen"$/,/^version/{s/^version = "\(.*\)"/\1/p}' Cargo.lock | head -1)
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen-cli@${{ steps.wb.outputs.version }}
+
       - name: Build wasm
         run: |
           cargo build --release --target wasm32-unknown-unknown -p hane-wasm
           mkdir -p web/public
-          cp target/wasm32-unknown-unknown/release/hane_wasm.wasm web/public/hane.wasm
+          wasm-bindgen --target web --out-dir web/public --out-name hane \
+            target/wasm32-unknown-unknown/release/hane_wasm.wasm
+          ls -l web/public/
 
       - name: Build web bundle
         working-directory: web
@@ -56,8 +70,11 @@ jobs:
           npm ci
           npm run build
 
+      # Both halves, not just the wasm: since #17 the shell loads the
+      # wasm-bindgen glue, and a bundle with one and not the other is a page
+      # that fails at runtime with a 404 nobody sees in CI.
       - name: Check the bundle contains the engine
-        run: test -f web/dist/hane.wasm
+        run: test -f web/dist/hane_bg.wasm && test -f web/dist/hane.js
 
       - uses: actions/upload-artifact@v7
         with:

@@ -1,0 +1,11 @@
+# web-sys keeps its WebGPU bindings behind `--cfg=web_sys_unstable_apis`,
+# because the spec is still moving. D-003's second backend (#24) needs them.
+#
+# It has to be a rustflag: the cfg is read while *web-sys itself* is compiled,
+# so a `build.rs` in `hane-wasm` -- which can only configure the crate that
+# declares it -- would not reach it. Repo-level so `cargo build`, `cargo test`,
+# `cargo clippy` and CI all agree without a flag anyone has to remember, and so
+# that forgetting it fails as "no method named `gpu`" at compile time rather
+# than as a backend that silently is not there.
+[build]
+rustflags = ["--cfg=web_sys_unstable_apis"]
