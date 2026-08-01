@@ -112,6 +112,20 @@ impl Style {
         Self { values }
     }
 
+    /// Every property, with whether it inherits and this style's computed value
+    /// for it.
+    ///
+    /// Export needs the inheritance flag as much as the value: it writes back
+    /// only the properties a reimport would not recompute on its own, and
+    /// whether the parent's value or the initial one is what gets recomputed is
+    /// exactly this flag.
+    pub fn properties(&self) -> impl Iterator<Item = (&'static str, bool, &str)> {
+        PROPERTIES
+            .iter()
+            .zip(&self.values)
+            .map(|(&(name, inherited, _), value)| (name, inherited, value.as_str()))
+    }
+
     /// The computed value of `property`, or `None` when it is not a property
     /// this crate models.
     pub fn get(&self, property: &str) -> Option<&str> {
