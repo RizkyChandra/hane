@@ -599,7 +599,7 @@ fn parse_os2(t: &[u8]) -> Result<Os2, Error> {
 ///
 /// `checked_add` rather than `+`: `off` comes from the file, and a wrapped end
 /// offset would produce a range that `get` accepts.
-fn u16_at(data: &[u8], off: usize) -> Result<u16, Error> {
+pub(crate) fn u16_at(data: &[u8], off: usize) -> Result<u16, Error> {
     let end = off
         .checked_add(2)
         .ok_or(Error::Malformed("offset overflow"))?;
@@ -610,12 +610,12 @@ fn u16_at(data: &[u8], off: usize) -> Result<u16, Error> {
 }
 
 /// A big-endian `i16` at a byte offset.
-fn i16_at(data: &[u8], off: usize) -> Result<i16, Error> {
+pub(crate) fn i16_at(data: &[u8], off: usize) -> Result<i16, Error> {
     u16_at(data, off).map(|v| v as i16)
 }
 
 /// A big-endian `u32` at a byte offset.
-fn u32_at(data: &[u8], off: usize) -> Result<u32, Error> {
+pub(crate) fn u32_at(data: &[u8], off: usize) -> Result<u32, Error> {
     let end = off
         .checked_add(4)
         .ok_or(Error::Malformed("offset overflow"))?;
