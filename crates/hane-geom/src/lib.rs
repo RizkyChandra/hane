@@ -20,6 +20,7 @@ mod curve;
 mod elevate;
 mod flatten;
 pub mod fuzz;
+mod intersect;
 mod nearest;
 mod path;
 mod rect;
@@ -28,6 +29,7 @@ mod vec2;
 
 pub use affine::Affine;
 pub use curve::{CubicBez, QuadBez};
+pub use intersect::Intersections;
 pub use path::PathEl;
 pub use rect::Rect;
 pub use vec2::{Point, Vec2};
