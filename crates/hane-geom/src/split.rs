@@ -7,19 +7,7 @@
 //! *same* de Casteljau point, and the outer endpoints are copied straight from
 //! the original rather than recomputed.
 
-use crate::{CubicBez, Point, QuadBez};
-
-/// Linear interpolation in the symmetric form `(1 - t) * a + t * b`.
-///
-/// [`Point::lerp`] uses `a + (b - a) * t`, which is exact at `t = 0` but only
-/// approximate at `t = 1` once `a` and `b` differ wildly in magnitude. This
-/// form is exact at both ends -- the weights are exactly 1 and 0 there -- which
-/// is what makes `split(1)` hand back the original curve unchanged.
-#[inline]
-fn lerp(a: Point, b: Point, t: f64) -> Point {
-    let mt = 1.0 - t;
-    Point::new(mt * a.x + t * b.x, mt * a.y + t * b.y)
-}
+use crate::{CubicBez, QuadBez};
 
 /// Reparameterise `t1` into the domain of the curve remaining after a split at
 /// `t0`, whose parameter runs over `[t0, 1]`.
@@ -39,9 +27,9 @@ impl QuadBez {
     /// exactly those of `self`.
     #[inline]
     pub fn split(self, t: f64) -> (Self, Self) {
-        let a = lerp(self.p0, self.p1, t);
-        let b = lerp(self.p1, self.p2, t);
-        let m = lerp(a, b, t);
+        let a = self.p0.lerp(self.p1, t);
+        let b = self.p1.lerp(self.p2, t);
+        let m = a.lerp(b, t);
         (Self::new(self.p0, a, m), Self::new(m, b, self.p2))
     }
 
@@ -60,12 +48,12 @@ impl CubicBez {
     /// exactly those of `self`.
     #[inline]
     pub fn split(self, t: f64) -> (Self, Self) {
-        let a = lerp(self.p0, self.p1, t);
-        let b = lerp(self.p1, self.p2, t);
-        let c = lerp(self.p2, self.p3, t);
-        let d = lerp(a, b, t);
-        let e = lerp(b, c, t);
-        let m = lerp(d, e, t);
+        let a = self.p0.lerp(self.p1, t);
+        let b = self.p1.lerp(self.p2, t);
+        let c = self.p2.lerp(self.p3, t);
+        let d = a.lerp(b, t);
+        let e = b.lerp(c, t);
+        let m = d.lerp(e, t);
         (Self::new(self.p0, a, d, m), Self::new(m, e, c, self.p3))
     }
 
@@ -80,6 +68,7 @@ impl CubicBez {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Point;
 
     const EPS: f64 = 1e-12;
 
