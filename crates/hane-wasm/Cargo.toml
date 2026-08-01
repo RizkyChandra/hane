@@ -27,3 +27,17 @@ hane-gpu.workspace = true
 hane-svg.workspace = true
 hane-edit.workspace = true
 hane-text.workspace = true
+wasm-bindgen = "0.2"
+
+# D-010: this crate holds the GL context. The feature list is the exact set of
+# bindings the P2 probe touches -- web-sys generates code per feature, so an
+# unused one is dead weight in every .wasm we ship.
+web-sys = { version = "0.3", features = [
+    "Event",
+    "EventTarget",
+    "HtmlCanvasElement",
+    "WebGl2RenderingContext",
+    "console",
+] }
+# Only for building the getContext attribute object; see `glctx.rs`.
+js-sys = "0.3"
