@@ -139,3 +139,91 @@ was specified for, and nowhere else.
   the benchmark does not.
 - The scan's query writes ids into a `Vec` exactly as the tree's does, so neither gets credit
   for a cheaper output path.
+
+---
+
+## Viewport culling and the tile cache (#28, #30)
+
+```sh
+cargo run --release --example tile_bench
+```
+
+**Verdict: both criteria hold with two orders of magnitude to spare on the cull, and the tile
+cache's hit rate is decided by the edit pattern, not by the document size.** Culling a 100k
+scene to 2395 visible items costs 5.6us against a budget of 1000us. The cache holds 98% over a
+scripted pan and zoom, and it is worth knowing that a stream of *scattered* edits is what takes
+that apart -- 20 of them a frame drops it to 62%, while the same 20 edits in one dragged
+selection stay at 93%.
+
+Machine and build as above: AMD Ryzen 9 9950X3D, `opt-level = 3`, `lto = true`.
+
+### What was measured
+
+- **Cull.** `View::visible_bounds` plus one `Quadtree::query`, over 64 viewports along a
+  diagonal sweep so that no two measured frames answer the same query. Scene generation is
+  identical to `spatial_bench` -- `n` boxes of 4-40 units over a document that grows with `n`
+  -- so the two tables describe the same documents.
+- **Rotated.** The same viewport turned 30 degrees. The query rect is the bounding box of the
+  rotated viewport (#28), which is why the item count roughly doubles: that is the cost of the
+  design, measured rather than argued.
+- **2560x1440.** Four times the area, which at this density is what it takes to reach the
+  ~2k visible items #28's criterion names.
+- **Tile cache.** 300 frames of a steady drag with a 1.0078x per-frame zoom under it, crossing
+  a power-of-two level boundary every ~90 frames. 128px overdraw, 64 MiB budget, 256x256 RGBA8
+  tiles. Nothing is rendered: a miss allocates a tile-sized buffer and stores it, because what
+  a render costs belongs to #31 and mixing it in would bury the hit rate.
+- **Edits.** Each edit invalidates both the box the object left and the box it arrived at, and
+  every edit lands inside the visible region -- an off-screen edit dirties nothing resident and
+  would flatter the hit rate for free.
+
+### Culling
+
+| n | viewport | items returned | time (us) |
+|---:|---|---:|---:|
+| 1000 | 1280x720, no margin | 156 | 0.23 |
+| 1000 | 1280x720, 256px overdraw | 301 | 0.39 |
+| 1000 | 1280x720, rotated 30 degrees | 283 | 0.36 |
+| 1000 | 2560x1440, no margin | 419 | 0.52 |
+| 10000 | 1280x720, no margin | 517 | 0.96 |
+| 10000 | 1280x720, 256px overdraw | 1177 | 2.17 |
+| 10000 | 1280x720, rotated 30 degrees | 850 | 1.44 |
+| 10000 | 2560x1440, no margin | 1858 | 3.72 |
+| 100000 | 1280x720, no margin | 617 | 1.76 |
+| 100000 | 1280x720, 256px overdraw | 1444 | 3.91 |
+| 100000 | 1280x720, rotated 30 degrees | 1205 | 2.20 |
+| **100000** | **2560x1440, no margin** | **2395** | **5.60** |
+| 500000 | 1280x720, no margin | 615 | 3.03 |
+| 500000 | 1280x720, 256px overdraw | 1439 | 4.80 |
+| 500000 | 1280x720, rotated 30 degrees | 1221 | 4.11 |
+| 500000 | 2560x1440, no margin | 2386 | 7.11 |
+
+The bolded row is #28's criterion: **2395 items culled from 100k in 5.6us, 178x under the 1ms
+budget.** Time tracks the number of items returned far more than `n` -- 500k costs 1.3x what
+100k does for the same answer size, and that residue is the deeper tree, not the scan.
+
+### Tile cache
+
+300 frames, 1280x720, 128px overdraw, 64 MiB budget.
+
+| script | hit rate | tiles rendered | resident bytes |
+|---|---:|---:|---:|
+| pan + zoom | 98.0% | 209 | 54788096 |
+| pan + zoom, 20 edits/frame in one selection | 92.9% | 729 | 46399488 |
+| pan + zoom, 20 edits/frame scattered | 61.8% | 3944 | 43778048 |
+| pan + zoom, 200 edits/frame scattered | 25.0% | 7757 | 43778048 |
+
+The 209 tiles of the first row are the whole cost of 300 frames of navigation: about 35 tiles
+are on screen at once, so all but the first six frames' worth are the leading edge scrolling in
+and the two level boundaries the zoom crosses. Resident bytes stay under the 67108864-byte
+budget in every run, which is the eviction policy doing its job rather than a coincidence of
+this script.
+
+### Things these numbers do not cover
+
+- **No rendering.** A cache miss here allocates; in the browser it rasterises and uploads. The
+  hit rate is the honest number; the frame time is #31's.
+- **Uniform density and a uniform edit distribution.** A real selection is spatially clustered,
+  which is the 92.9% row, but it is also usually *the same* selection frame after frame, which
+  would do better than this script's fresh random cluster each frame.
+- **One thread, one document.** No measurement of a second cache, or of the memory pressure of
+  several documents open at once.
