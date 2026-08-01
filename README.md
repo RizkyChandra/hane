@@ -5,9 +5,34 @@
 A vector design engine for the web — an Affinity Designer successor that runs in the browser,
 so platform stops mattering.
 
-> **Status: P0.** Nothing works yet. The workspace, CI and geometry primitives exist; the
-> renderer does not. See [`docs/PLAN.md`](docs/PLAN.md) for the full plan and
-> [issues](https://github.com/RizkyChandra/hane/issues) for what's next.
+> **Status: the engine works. There is no application yet.**
+>
+> Geometry, both rasterizers, the scene graph, stroking, boolean operations, SVG round-trip,
+> text, and the editing primitives are all built and tested. What does not exist is the thing
+> a user opens: no tools bound to a pointer, no panels, no file open/save. `web/` is a shell
+> and a benchmark page.
+>
+> See [`docs/PLAN.md`](docs/PLAN.md) for the phases and [`BENCHMARKS.md`](BENCHMARKS.md) for
+> the measurements.
+
+## Where it actually stands
+
+Every claim below is a number some test asserts, not an estimate.
+
+| | |
+|---|---|
+| GPU vs CPU oracle | **41 of 41** comparable fixtures match in Chromium *and* Firefox; 31 bit-exact, worst difference **1 count** (D-002) |
+| Glyph outlines | **7,158,110 glyphs** across 900 faces, control-point-exact against fontTools |
+| Text shaping | **99.98%** exact against HarfBuzz over 34,314 comparisons |
+| SVG round-trip | **16,074 real files**, worst coordinate delta **0.0**; RMSE 0 against librsvg |
+| Boolean ops | union/intersect area error **2.6e-7 / 9.3e-8**; `union + intersect − (A+B)` = 8.9e-16 |
+| 100k objects | CPU frame p99 **2.8 ms** (Chromium) / **3.4 ms** (Firefox) of a 16 ms budget |
+| Dependencies | **zero**, enforced in CI before anything else runs |
+
+Known-not-robust, because saying so is the point: boolean shallow-angle crossings fail at about
+1 pair in 200 on an adversarial corpus (asserted as a *rate*, not hidden); the stroker exceeds
+tolerance on 1 of 3000 random cubics near a cusp; `extreme_coords` cannot be GPU-compared
+because `f32` has a 64-pixel quantum at 1e9.
 
 ## What this is
 
