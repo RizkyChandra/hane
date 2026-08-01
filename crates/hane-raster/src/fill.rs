@@ -1,12 +1,12 @@
-//! Scanline anti-aliased fill by the nonzero winding rule (D-002).
+//! Scanline anti-aliased fill, by either winding rule (D-002).
 //!
 //! # The algorithm, and why this one
 //!
 //! Every path is flattened to a list of straight edges. For each pixel row the
 //! rasterizer walks [`SUB_ROWS`] horizontal sample lines through it. On each
 //! line it intersects every edge, sorts the crossings by `x`, accumulates the
-//! winding number left to right, and adds the spans where that number is
-//! nonzero into a per-row coverage accumulator. Horizontal coverage is
+//! winding number left to right, and adds the spans that number puts inside
+//! the path -- by [`FillRule`] -- into a per-row coverage accumulator. Horizontal coverage is
 //! *analytic*: a span ending at `x = 4.25` gives pixel 4 exactly a quarter.
 //!
 //! So there is exactly one approximation in the whole pipeline -- the vertical
@@ -37,6 +37,8 @@
 //! is the classic source of a one-pixel bleed out of a scanline fill, and of
 //! spurious pinholes where two edges meet.
 
+use crate::clip::Clip;
+use crate::paint::{Paint, dither, premul};
 use hane_geom::{CubicBez, PathEl, Point, QuadBez};
 
 /// Vertical sample lines per pixel row.
@@ -69,10 +71,24 @@ const FLATTEN_TOLERANCE: f64 = 1e-3;
 /// `dir` remembers which way the path actually ran through it, because that is
 /// what the winding number counts. Sorting the endpoints up front is what makes
 /// the crossing test a single half-open range check.
-struct Edge {
+pub(crate) struct Edge {
     top: Point,
     bot: Point,
     dir: i32,
+}
+
+/// Which rule decides whether a span between two crossings is inside the path.
+///
+/// Chosen per fill, not per rasterizer: an SVG document mixes the two freely,
+/// and both rules read the same accumulated winding number.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FillRule {
+    /// Inside wherever the winding number is not zero. A shape wound twice the
+    /// same way is solid; a figure-eight fills completely.
+    NonZero,
+    /// Inside wherever the winding number is odd. Every self-overlap is a hole,
+    /// whichever way the two loops are wound.
+    EvenOdd,
 }
 
 /// A straight (non-premultiplied) 8-bit RGBA colour.
@@ -146,40 +162,104 @@ impl Pixmap {
     /// Coordinates are in pixels, with the pixel `(i, j)` covering
     /// `[i, i+1) x [j, j+1)`. Anything outside the pixmap is clipped away.
     pub fn fill_path(&mut self, path: &[PathEl], color: Color) {
+        self.fill_path_with(path, &Paint::Solid(color), FillRule::NonZero, None);
+    }
+
+    /// Fills `path` with `paint` under `rule`, restricted to `clip`.
+    ///
+    /// The general form of [`Pixmap::fill_path`]. The clip multiplies the
+    /// coverage rather than masking the result, so a clip edge is anti-aliased
+    /// exactly like a fill edge and nothing is rasterized twice.
+    ///
+    /// Panics if `clip` was built for a different pixmap size, which would
+    /// otherwise silently apply the wrong mask row to every pixel.
+    pub fn fill_path_with(
+        &mut self,
+        path: &[PathEl],
+        paint: &Paint,
+        rule: FillRule,
+        clip: Option<&Clip>,
+    ) {
+        // An empty clip costs nothing: not even the flattening below.
+        let rows = match clip {
+            Some(c) => {
+                assert!(
+                    c.width == self.width && c.height == self.height,
+                    "clip is {}x{} but the pixmap is {}x{}",
+                    c.width,
+                    c.height,
+                    self.width,
+                    self.height
+                );
+                if c.is_empty() {
+                    return;
+                }
+                (c.y0, c.y1)
+            }
+            None => (0, self.height),
+        };
+
         let edges = build_edges(path);
         if edges.is_empty() || self.width == 0 {
             return;
         }
-
-        // Only the rows the path can reach. `floor`/`ceil` because a row is
-        // touched as soon as any part of it is, and both ends are clamped to
-        // the pixmap before the cast so the range is always valid.
-        let mut lo = f64::INFINITY;
-        let mut hi = f64::NEG_INFINITY;
-        for e in &edges {
-            lo = lo.min(e.top.y);
-            hi = hi.max(e.bot.y);
-        }
-        let height = f64::from(self.height);
-        let y0 = lo.floor().clamp(0.0, height) as u32;
-        let y1 = hi.ceil().clamp(0.0, height) as u32;
+        let (py0, py1) = edge_rows(&edges, self.height);
+        let (y0, y1) = (py0.max(rows.0), py1.min(rows.1));
 
         let width = self.width as usize;
         let mut acc = vec![0.0; width];
         let mut crossings = Vec::new();
+        // Hoisted: a solid paint is the same four numbers for every pixel, and
+        // it is the only paint that must not be dithered.
+        let solid = match paint {
+            Paint::Solid(c) => Some(premul(*c)),
+            _ => None,
+        };
 
         for y in y0..y1 {
-            coverage_row(&edges, y, &mut acc, &mut crossings);
+            coverage_row(&edges, y, rule, &mut acc, &mut crossings);
+            if let Some(c) = clip {
+                // The whole of #16. Coverage is a product of independent
+                // masks, so nesting is just more factors.
+                for (a, &m) in acc.iter_mut().zip(c.row(y)) {
+                    *a *= m;
+                }
+            }
             let row = y as usize * width * 4;
             for (x, &cov) in acc.iter().enumerate() {
                 if cov <= 0.0 {
                     continue;
                 }
+                let (src, noise) = match solid {
+                    Some(src) => (src, 0.0),
+                    None => {
+                        let p = Point::new(x as f64 + 0.5, f64::from(y) + 0.5);
+                        (paint.premul_at(p), dither(x as u32, y))
+                    }
+                };
                 let i = row + x * 4;
-                blend(&mut self.data[i..i + 4], color, cov);
+                blend(&mut self.data[i..i + 4], src, cov, noise);
             }
         }
     }
+}
+
+/// The half-open range of pixel rows `edges` can touch, clamped to `height`.
+///
+/// `floor`/`ceil` because a row is touched as soon as any part of it is, and
+/// both ends are clamped before the cast so the range is always valid.
+pub(crate) fn edge_rows(edges: &[Edge], height: u32) -> (u32, u32) {
+    let mut lo = f64::INFINITY;
+    let mut hi = f64::NEG_INFINITY;
+    for e in edges {
+        lo = lo.min(e.top.y);
+        hi = hi.max(e.bot.y);
+    }
+    let h = f64::from(height);
+    (
+        lo.floor().clamp(0.0, h) as u32,
+        hi.ceil().clamp(0.0, h) as u32,
+    )
 }
 
 /// Flattens a path into fill edges.
@@ -187,7 +267,7 @@ impl Pixmap {
 /// Curves are flattened to within [`FLATTEN_TOLERANCE`]; the flattener emits
 /// both endpoints bit-exactly, so consecutive segments meet with no gap for a
 /// crossing to leak through.
-fn build_edges(path: &[PathEl]) -> Vec<Edge> {
+pub(crate) fn build_edges(path: &[PathEl]) -> Vec<Edge> {
     let mut out = Vec::new();
     let mut poly = Vec::new();
     let mut cur = Point::ORIGIN;
@@ -252,7 +332,13 @@ fn push_edge(out: &mut Vec<Edge>, a: Point, b: Point) {
 ///
 /// `crossings` is scratch owned by the caller only to keep an allocation out of
 /// the row loop.
-fn coverage_row(edges: &[Edge], y: u32, acc: &mut [f64], crossings: &mut Vec<(f64, i32)>) {
+pub(crate) fn coverage_row(
+    edges: &[Edge],
+    y: u32,
+    rule: FillRule,
+    acc: &mut [f64],
+    crossings: &mut Vec<(f64, i32)>,
+) {
     acc.fill(0.0);
     for sub in 0..SUB_ROWS {
         let sy = f64::from(y) + (f64::from(sub) + 0.5) * SUB_WEIGHT;
@@ -276,10 +362,16 @@ fn coverage_row(edges: &[Edge], y: u32, acc: &mut [f64], crossings: &mut Vec<(f6
         let mut winding = 0;
         for w in crossings.windows(2) {
             winding += w[0].1;
-            // The nonzero rule, and the single line that even-odd (#12)
-            // replaces. Spans between consecutive crossings are disjoint by
+            // Spans between consecutive crossings are disjoint by
             // construction, so coverage can never double-count a pixel.
-            if winding == 0 {
+            let inside = match rule {
+                FillRule::NonZero => winding != 0,
+                // The whole of #12: the same accumulated winding number, read
+                // for parity instead. A crossing counted twice cancels, which
+                // is why an overlap is a hole whichever way it is wound.
+                FillRule::EvenOdd => winding % 2 != 0,
+            };
+            if !inside {
                 continue;
             }
             add_span(acc, w[0].0, w[1].0, SUB_WEIGHT);
@@ -308,20 +400,35 @@ fn add_span(acc: &mut [f64], a: f64, b: f64, weight: f64) {
     }
 }
 
-/// Source-over of `color` at `coverage` onto one premultiplied pixel.
-fn blend(dst: &mut [u8], color: Color, coverage: f64) {
+/// Source-over of a premultiplied `src` at `coverage` onto one premultiplied
+/// pixel, `dither` biasing the rounding.
+///
+/// `src` is on the same 0..=255 scale as the destination bytes, so the whole
+/// operation is `src * coverage + dst * (1 - alpha * coverage)` -- one multiply
+/// and no divide, which is the entire reason the buffer is premultiplied.
+fn blend(dst: &mut [u8], src: [f64; 4], coverage: f64, dither: f64) {
     // Clamped because two spans meeting exactly inside a pixel can sum to an
     // ulp over one. Unclamped that makes the blend below a slightly *more* than
     // convex combination, which can brighten a pixel past the colour it was
     // filled with -- invisible in a byte, but this is an oracle and P2 diffs it.
-    let a = f64::from(color.a) / 255.0 * coverage.clamp(0.0, 1.0);
-    let src = [color.r, color.g, color.b, 255];
+    let cov = coverage.clamp(0.0, 1.0);
+    // `src[3]` is the source alpha: premultiplying leaves that channel alone.
+    let inv = 1.0 - src[3] * cov / 255.0;
     for (d, s) in dst.iter_mut().zip(src) {
         // Rounding, not truncating. It is what makes full coverage of an opaque
         // colour land on exactly that colour, and 254/255 the commonest
-        // off-by-one in a rasterizer.
-        *d = (f64::from(s) * a + f64::from(*d) * (1.0 - a)).round() as u8;
+        // off-by-one in a rasterizer. The cast saturates, so the dither bias
+        // cannot wrap a full channel round to zero.
+        *d = (s * cov + f64::from(*d) * inv + dither).round() as u8;
     }
+    // The premultiplied convention, asserted where the bytes are written --
+    // the one place it can be checked at all. It survives because the same
+    // dither is added to every channel and rounding is monotone, so a channel
+    // that was under alpha before rounding is still under it after.
+    debug_assert!(
+        dst[0] <= dst[3] && dst[1] <= dst[3] && dst[2] <= dst[3],
+        "unpremultiplied pixel {dst:?}"
+    );
 }
 
 #[cfg(test)]
@@ -974,5 +1081,321 @@ mod tests {
             (7.5, 10.75),
         ]);
         assert_eq!(filled(24, 24, &plain).data(), filled(24, 24, &dense).data());
+    }
+
+    // ------------------------------------------------------------- even-odd
+
+    fn filled_rule(w: u32, h: u32, path: &[PathEl], rule: FillRule) -> Pixmap {
+        let mut pm = Pixmap::new(w, h);
+        pm.fill_path_with(path, &Paint::Solid(WHITE), rule, None);
+        pm
+    }
+
+    #[test]
+    fn even_odd_leaves_a_doubly_wound_overlap_empty() {
+        // The same two squares the nonzero test fills solid.
+        let mut path = poly(&[(1.0, 1.0), (7.0, 1.0), (7.0, 7.0), (1.0, 7.0)]);
+        path.extend(poly(&[(4.0, 4.0), (10.0, 4.0), (10.0, 10.0), (4.0, 10.0)]));
+        let pm = filled_rule(12, 12, &path, FillRule::EvenOdd);
+        assert_eq!(cov(&pm, 5, 5), 0, "the overlap must be empty");
+        assert_eq!(cov(&pm, 2, 2), 255);
+        assert_eq!(cov(&pm, 8, 8), 255);
+        assert_eq!(cov(&pm, 9, 2), 0);
+
+        // A figure-eight in a single subpath: the pentagram's middle pentagon
+        // is the overlap, and even-odd empties it.
+        let r = 20.0;
+        let pts: Vec<(f64, f64)> = (0..5)
+            .map(|i| {
+                let a =
+                    std::f64::consts::TAU * f64::from(i) * 2.0 / 5.0 - std::f64::consts::FRAC_PI_2;
+                (25.0 + r * a.cos(), 25.0 + r * a.sin())
+            })
+            .collect();
+        let pm = filled_rule(50, 50, &poly(&pts), FillRule::EvenOdd);
+        assert_eq!(cov(&pm, 25, 25), 0, "the centre must be empty");
+        assert_eq!(cov(&pm, 25, 8), 255, "the arms must still be solid");
+    }
+
+    #[test]
+    fn even_odd_alternates_concentric_rings_whatever_the_winding() {
+        // Three circles, one inside the next. Even-odd fills the outer ring,
+        // empties the middle one and fills the core -- and unlike nonzero it
+        // does so whichever way each one is wound.
+        for &(a, b, c) in &[
+            (false, false, false),
+            (false, true, false),
+            (true, true, false),
+            (false, true, true),
+        ] {
+            let mut path = poly(&ngon(25.0, 25.0, 22.0, 64, a));
+            path.extend(poly(&ngon(25.0, 25.0, 15.0, 64, b)));
+            path.extend(poly(&ngon(25.0, 25.0, 7.0, 64, c)));
+            let pm = filled_rule(50, 50, &path, FillRule::EvenOdd);
+            assert_eq!(cov(&pm, 25, 6), 255, "outer ring, winding {a}{b}{c}");
+            assert_eq!(cov(&pm, 25, 14), 0, "middle ring, winding {a}{b}{c}");
+            assert_eq!(cov(&pm, 25, 25), 255, "core, winding {a}{b}{c}");
+            // The area is the alternating sum, not the outer disc.
+            let want = shoelace(&ngon(25.0, 25.0, 22.0, 64, false))
+                - shoelace(&ngon(25.0, 25.0, 15.0, 64, false))
+                + shoelace(&ngon(25.0, 25.0, 7.0, 64, false));
+            let got = total(&pm);
+            assert!((got - want).abs() / want < 0.01, "{got} vs {want}");
+        }
+    }
+
+    #[test]
+    fn the_two_rules_agree_on_a_path_that_does_not_cross_itself() {
+        // Where every span has winding 0 or +-1 the parity and the sign say
+        // the same thing, so the two rules must agree byte for byte.
+        let curvy = vec![
+            PathEl::MoveTo(Point::new(4.0, 4.0)),
+            PathEl::LineTo(Point::new(28.0, 4.0)),
+            PathEl::CurveTo(
+                Point::new(34.0, 12.0),
+                Point::new(34.0, 20.0),
+                Point::new(28.0, 28.0),
+            ),
+            PathEl::QuadTo(Point::new(14.0, 30.0), Point::new(10.0, 22.0)),
+            PathEl::ClosePath,
+        ];
+        let cases = [
+            poly(&ngon(20.0, 20.0, 13.0, 7, false)),
+            poly(&ngon(20.0, 20.0, 13.0, 7, true)),
+            poly(&[(2.5, 3.25), (30.0, 8.0), (17.0, 31.5)]),
+            curvy,
+            // Two disjoint subpaths never overlap, so they agree too.
+            {
+                let mut p = poly(&[(2.0, 2.0), (10.0, 2.0), (10.0, 10.0)]);
+                p.extend(poly(&[(20.0, 20.0), (30.0, 20.0), (30.0, 30.0)]));
+                p
+            },
+        ];
+        for path in &cases {
+            assert_eq!(
+                filled_rule(40, 40, path, FillRule::NonZero).data(),
+                filled_rule(40, 40, path, FillRule::EvenOdd).data(),
+                "{path:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn the_fill_rule_is_per_path_not_per_pixmap() {
+        // Two self-overlapping shapes into one pixmap, one rule each.
+        let mut left = poly(&[(1.0, 1.0), (7.0, 1.0), (7.0, 7.0), (1.0, 7.0)]);
+        left.extend(poly(&[(4.0, 4.0), (10.0, 4.0), (10.0, 10.0), (4.0, 10.0)]));
+        let right: Vec<PathEl> = left
+            .iter()
+            .map(|el| match *el {
+                PathEl::MoveTo(p) => PathEl::MoveTo(p + hane_geom::Vec2::new(12.0, 0.0)),
+                PathEl::LineTo(p) => PathEl::LineTo(p + hane_geom::Vec2::new(12.0, 0.0)),
+                other => other,
+            })
+            .collect();
+        let mut pm = Pixmap::new(24, 12);
+        pm.fill_path_with(&left, &Paint::Solid(WHITE), FillRule::EvenOdd, None);
+        pm.fill_path_with(&right, &Paint::Solid(WHITE), FillRule::NonZero, None);
+        assert_eq!(cov(&pm, 5, 5), 0, "the even-odd overlap is a hole");
+        assert_eq!(cov(&pm, 17, 5), 255, "the nonzero overlap is solid");
+    }
+
+    // ---------------------------------------------------------- compositing
+
+    /// Source-over in premultiplied f64 on the 0..=255 scale: the exact
+    /// arithmetic the byte blend approximates.
+    fn over(src: [f64; 4], dst: [f64; 4]) -> [f64; 4] {
+        let inv = 1.0 - src[3] / 255.0;
+        [0, 1, 2, 3].map(|i| src[i] + dst[i] * inv)
+    }
+
+    fn whole(w: u32, h: u32) -> Vec<PathEl> {
+        poly(&[
+            (0.0, 0.0),
+            (f64::from(w), 0.0),
+            (f64::from(w), f64::from(h)),
+            (0.0, f64::from(h)),
+        ])
+    }
+
+    #[test]
+    fn an_opaque_source_replaces_the_destination_exactly() {
+        let mut pm = Pixmap::new(4, 4);
+        pm.fill_path(
+            &whole(4, 4),
+            Color {
+                r: 200,
+                g: 30,
+                b: 90,
+                a: 128,
+            },
+        );
+        for c in [
+            Color {
+                r: 1,
+                g: 2,
+                b: 3,
+                a: 255,
+            },
+            Color {
+                r: 254,
+                g: 0,
+                b: 255,
+                a: 255,
+            },
+            Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+        ] {
+            pm.fill_path(&whole(4, 4), c);
+            assert_eq!(&pm.data()[0..4], &[c.r, c.g, c.b, 255], "{c:?}");
+        }
+    }
+
+    #[test]
+    fn a_zero_alpha_source_leaves_the_destination_bit_identical() {
+        let mut pm = Pixmap::new(8, 8);
+        pm.fill_path(&poly(&[(1.5, 1.0), (7.0, 2.25), (3.0, 6.5)]), WHITE);
+        let before = pm.data().to_vec();
+        for c in [
+            Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 0,
+            },
+            Color {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 0,
+            },
+        ] {
+            pm.fill_path(&whole(8, 8), c);
+            assert_eq!(pm.data(), &before[..], "{c:?}");
+        }
+    }
+
+    #[test]
+    fn half_alpha_white_over_black_is_exactly_128() {
+        // Both roads to a half: a half-alpha colour at full coverage, and an
+        // opaque colour at half coverage. 127 or 129 here is the classic
+        // sign of a `/ 255` that should have been a `/ 256` or vice versa.
+        let mut pm = Pixmap::new(4, 4);
+        pm.fill_path(
+            &whole(4, 4),
+            Color {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 128,
+            },
+        );
+        assert_eq!(&pm.data()[0..4], &[128; 4]);
+
+        // Half coverage: a rectangle covering exactly the left half of pixel 0.
+        let mut pm = Pixmap::new(4, 4);
+        pm.fill_path(
+            &poly(&[(0.0, 0.0), (0.5, 0.0), (0.5, 4.0), (0.0, 4.0)]),
+            WHITE,
+        );
+        assert_eq!(&pm.data()[0..4], &[128; 4]);
+    }
+
+    #[test]
+    fn compositing_a_chain_stays_within_one_lsb_of_exact() {
+        // Source-over is exactly associative in premultiplied f64, so
+        // regrouping a chain can only differ by the rounding at each step.
+        // The exact chain below is that regrouping, done once.
+        let chain = [
+            Color {
+                r: 200,
+                g: 40,
+                b: 10,
+                a: 77,
+            },
+            Color {
+                r: 5,
+                g: 250,
+                b: 90,
+                a: 191,
+            },
+            Color {
+                r: 128,
+                g: 128,
+                b: 128,
+                a: 3,
+            },
+            Color {
+                r: 0,
+                g: 0,
+                b: 255,
+                a: 128,
+            },
+            Color {
+                r: 255,
+                g: 255,
+                b: 0,
+                a: 40,
+            },
+            Color {
+                r: 17,
+                g: 200,
+                b: 33,
+                a: 250,
+            },
+        ];
+        let mut pm = Pixmap::new(2, 2);
+        let mut exact = [0.0; 4];
+        let mut worst: f64 = 0.0;
+        for c in chain {
+            pm.fill_path(&whole(2, 2), c);
+            exact = over(crate::paint::premul(c), exact);
+            for i in 0..4 {
+                let err = (f64::from(pm.data()[i]) - exact[i]).abs();
+                worst = worst.max(err);
+                assert!(
+                    err <= 1.0,
+                    "after {c:?}: {:?} vs {exact:?}",
+                    &pm.data()[0..4]
+                );
+            }
+        }
+        // Measured, so a regression that doubles the error is visible even
+        // while it still passes.
+        assert!(worst < 0.75, "worst byte error {worst}");
+    }
+
+    #[test]
+    fn every_written_pixel_stays_premultiplied() {
+        // The convention asserted at the buffer boundary. `blend` also
+        // debug_asserts it per pixel; this covers a release build and says so
+        // over shapes with partial coverage, where it is least obvious.
+        check(
+            "premultiplied buffer",
+            300,
+            |r| {
+                let mut c = || Color {
+                    r: r.below(256) as u8,
+                    g: r.below(256) as u8,
+                    b: r.below(256) as u8,
+                    a: r.below(256) as u8,
+                };
+                [c(), c(), c()]
+            },
+            |colors| {
+                let mut pm = Pixmap::new(12, 12);
+                for (i, &c) in colors.iter().enumerate() {
+                    let d = i as f64 * 2.5;
+                    pm.fill_path(&poly(&[(1.0 + d, 0.5), (10.5, 2.0 + d), (2.5, 11.0)]), c);
+                }
+                pm.data()
+                    .chunks_exact(4)
+                    .all(|p| p[0] <= p[3] && p[1] <= p[3] && p[2] <= p[3])
+            },
+        );
     }
 }
