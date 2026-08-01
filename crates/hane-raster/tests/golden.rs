@@ -42,7 +42,7 @@
 //! - **Clipping (#16).** Wanted: a clip whose edge falls mid-pixel, a clip that
 //!   is entirely outside, and nested clips that intersect to nothing.
 
-use hane_raster::{Color, Pixmap, png};
+use hane_raster::{Color, Pixmap, diff, png};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -146,7 +146,7 @@ fn golden_corpus() {
 
         let (mismatch, prev_pixels) = match prev {
             Some((pw, ph, pixels)) if (pw, ph) == (w, h) => {
-                let (max, mean) = diff_stats(&pixels, pm.data());
+                let (max, mean) = diff::stats(&pixels, pm.data());
                 let bad = max > fixture.max_diff || mean > fixture.mean_diff;
                 (
                     bad.then(|| {
@@ -178,7 +178,7 @@ fn golden_corpus() {
                 &dir.join(format!("{}.diff.png", fixture.name)),
                 w,
                 h,
-                &diff_image(pixels, pm.data()),
+                &diff::image(pixels, pm.data()),
             );
         }
 
@@ -250,50 +250,6 @@ fn golden_dir() -> PathBuf {
 fn write_png(path: &Path, w: u32, h: u32, pixels: &[u8]) {
     fs::write(path, png::encode(w, h, pixels))
         .unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
-}
-
-/// The largest and the mean absolute per-channel difference between two RGBA
-/// buffers of the same length.
-fn diff_stats(a: &[u8], b: &[u8]) -> (u8, f64) {
-    assert_eq!(a.len(), b.len());
-    let mut max = 0;
-    let mut sum = 0u64;
-    for (x, y) in a.iter().zip(b) {
-        let d = x.abs_diff(*y);
-        max = max.max(d);
-        sum += u64::from(d);
-    }
-    let mean = if a.is_empty() {
-        0.0
-    } else {
-        sum as f64 / a.len() as f64
-    };
-    (max, mean)
-}
-
-/// Renders the difference between two buffers as an opaque image.
-///
-/// Matching pixels keep a dimmed grey of the golden, so the shape stays
-/// recognisable and a reviewer can see *where* on the shape the difference is.
-/// Differing pixels go yellow for a hair and red as the difference grows -- the
-/// 8x gain means a one-byte rounding difference is still visible rather than
-/// being a black pixel nobody notices.
-fn diff_image(golden: &[u8], actual: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(golden.len());
-    for (g, a) in golden.chunks_exact(4).zip(actual.chunks_exact(4)) {
-        let d = (0..4).map(|i| g[i].abs_diff(a[i])).max().unwrap_or(0);
-        if d == 0 {
-            // Rec. 601 luma of the golden, compressed into the dark half.
-            let luma = (0.299 * f64::from(g[0]) + 0.587 * f64::from(g[1]) + 0.114 * f64::from(g[2]))
-                as u32;
-            let grey = (luma / 4 + 24) as u8;
-            out.extend_from_slice(&[grey, grey, grey, 255]);
-        } else {
-            let amp = u8::try_from(u32::from(d) * 8).unwrap_or(255);
-            out.extend_from_slice(&[255, 255 - amp, 0, 255]);
-        }
-    }
-    out
 }
 
 // ---------------------------------------------------------------------------

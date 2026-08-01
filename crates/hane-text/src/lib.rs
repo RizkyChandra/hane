@@ -2,5 +2,10 @@
 //!
 //! Phase P8. See `docs/PLAN.md`.
 
+pub mod layout;
 pub mod opentype;
 mod outline;
+pub mod shape;
+#[cfg(test)]
+mod testfont;
+pub mod to_path;

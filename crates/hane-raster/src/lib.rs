@@ -3,6 +3,7 @@
 //! Phase P1. See `docs/PLAN.md`.
 
 mod clip;
+pub mod diff;
 mod fill;
 mod paint;
 pub mod png;

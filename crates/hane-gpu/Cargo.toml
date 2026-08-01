@@ -13,3 +13,9 @@ workspace = true
 hane-geom.workspace = true
 hane-path.workspace = true
 hane-scene.workspace = true
+
+# D-002: the GPU renderer is judged against the CPU rasterizer, so the diff
+# harness (#20) needs the oracle's committed goldens and its PNG codec.
+# Dev-only -- nothing in `src/` may reach for it.
+[dev-dependencies]
+hane-raster.workspace = true

@@ -571,6 +571,73 @@ fn arc_lies_on(c: CubicBez, t0: f64, t1: f64, other: CubicBez, tol: f64) -> bool
     })
 }
 
+/// A parameter from [`CubicBez::nearest`], recovered to full precision when
+/// the point really is on the curve.
+///
+/// `nearest` minimises a squared distance, and at a minimum of zero that
+/// function is flat: the parameter it returns carries about half of a double's
+/// digits, so an overlap end can land `1e-8` of the curve's length away from
+/// where it belongs. Cutting a curve there leaves two edges that should have
+/// been one, separated by a sliver, and slivers are what boolean operations
+/// die of.
+///
+/// Solving `c_i(t) = p_i` for the coordinate the curve is moving fastest in is
+/// a root find, not a minimisation, and a root find keeps every digit. The
+/// choice of coordinate is what makes the bracket well conditioned: the other
+/// one may be stationary here, in which case its equation says nothing.
+fn sharpen(c: CubicBez, p: Point, t: f64) -> f64 {
+    let d = c.deriv_at(t);
+    let (use_x, target) = if d.x.abs() >= d.y.abs() {
+        (true, p.x)
+    } else {
+        (false, p.y)
+    };
+    let at = |u: f64| {
+        let q = c.eval(u);
+        (if use_x { q.x } else { q.y }) - target
+    };
+    if at(t) == 0.0 || !t.is_finite() {
+        return t;
+    }
+    // Widen a bracket around the seed until it straddles the root. Starting
+    // tight and growing keeps a curve that meets the coordinate several times
+    // from bracketing the wrong one.
+    let (mut lo, mut hi) = (t, t);
+    let mut h = 1e-9;
+    for _ in 0..40 {
+        lo = (t - h).max(0.0);
+        hi = (t + h).min(1.0);
+        if at(lo) * at(hi) <= 0.0 || (lo == 0.0 && hi == 1.0) {
+            break;
+        }
+        h *= 4.0;
+    }
+    if at(lo) * at(hi) > 0.0 {
+        return t;
+    }
+    let rising = at(hi) > at(lo);
+    for _ in 0..60 {
+        let m = 0.5 * (lo + hi);
+        if m <= lo || m >= hi {
+            break;
+        }
+        if (at(m) < 0.0) == rising {
+            lo = m;
+        } else {
+            hi = m;
+        }
+    }
+    let m = 0.5 * (lo + hi);
+    // Never accept a worse answer: the seed came from a genuine minimisation,
+    // and a curve whose chosen coordinate doubles back can send the bracket
+    // to a different root.
+    if c.eval(m).distance(p) <= c.eval(t).distance(p) {
+        m
+    } else {
+        t
+    }
+}
+
 /// The shared arc of two curves that lie on top of each other, if there is
 /// one.
 ///
@@ -594,13 +661,13 @@ fn coincident(a: CubicBez, b: CubicBez, tol: f64) -> Option<Intersections> {
         let (s, d) = b.nearest(p);
         if d <= tol {
             ta.push(t);
-            tb.push(s);
+            tb.push(sharpen(b, p, s));
         }
     }
     for (t, p) in [(0.0, b.p0), (1.0, b.p3)] {
         let (s, d) = a.nearest(p);
         if d <= tol {
-            ta.push(s);
+            ta.push(sharpen(a, p, s));
             tb.push(t);
         }
     }
@@ -1185,6 +1252,111 @@ mod tests {
         let cells = [(0, 3), (1, 2), (2, 1), (3, 0)];
         assert_eq!(components(&cells).bounds, vec![[0, 3, 0, 3]]);
         assert!(components(&[]).bounds.is_empty());
+    }
+
+    /// The overlap ends are the parameters P6 cuts curves at, and half a
+    /// double is not enough precision for that -- two cuts that should have
+    /// been one vertex become two, with a sliver face between them.
+    #[test]
+    fn overlap_ends_carry_full_precision() {
+        // A straight run at 45 degrees, where `nearest` is at its worst: the
+        // distance it minimises is flat along the line, so its parameter is
+        // only about half a double accurate. The two pieces below share the
+        // stretch from (1, 1) to (3, 3).
+        let a = line(Point::new(0.0, 0.0), Point::new(3.0, 3.0));
+        let b = line(Point::new(1.0, 1.0), Point::new(4.0, 4.0));
+        let Intersections::Overlap { a: ra, b: rb } = a.intersect(b) else {
+            panic!("collinear overlapping segments must be an overlap")
+        };
+        // a(1/3) = (1, 1) and b(2/3) = (3, 3), both exactly.
+        assert!(
+            a.eval(ra.0).distance(Point::new(1.0, 1.0)) < 1e-14,
+            "{:?}",
+            a.eval(ra.0)
+        );
+        assert!((ra.1 - 1.0).abs() < 1e-15, "{ra:?}");
+        assert!(rb.0.abs() < 1e-15, "{rb:?}");
+        assert!(
+            b.eval(rb.1).distance(Point::new(3.0, 3.0)) < 1e-14,
+            "{:?}",
+            b.eval(rb.1)
+        );
+
+        // A curve overlapping a piece of itself, which is what a fold in an
+        // input produces once it has been split at the fold.
+        let c = wiggly();
+        let (x, y) = (c.subsegment(0.0, 0.7), c.subsegment(0.3, 1.0));
+        let Intersections::Overlap { a: ra, b: rb } = x.intersect(y) else {
+            panic!("expected an overlap")
+        };
+        assert!(x.eval(ra.0).distance(y.eval(rb.0)) < 1e-13, "{ra:?} {rb:?}");
+        assert!(x.eval(ra.1).distance(y.eval(rb.1)) < 1e-13, "{ra:?} {rb:?}");
+    }
+
+    /// Two curves approaching tangency, at every separation from a whole unit
+    /// down below the tolerance. Neither crossing may go missing while they
+    /// are still resolvable, and no separation may produce a third.
+    #[test]
+    fn a_near_tangency_never_splinters() {
+        let up = arch();
+        for k in 0..80 {
+            let d = 10.0f64.powi(-k / 5);
+            let down = CubicBez::new(
+                Point::new(0.0, 4.5 - d),
+                Point::new(1.0, 1.5 - d),
+                Point::new(3.0, 1.5 - d),
+                Point::new(4.0, 4.5 - d),
+            );
+            let hits = points(up, down);
+            assert!(hits.len() <= 2, "d={d} {hits:?}");
+            assert_on_both(up, down, &hits);
+            // The mirrored arches meet for every positive offset down to the
+            // point where the tolerance swallows the gap.
+            if d > 1e-9 {
+                assert!(!hits.is_empty(), "lost the contact at d={d}");
+            }
+        }
+    }
+
+    /// Everything that comes back is a real parameter, on both branches, over
+    /// the shapes a boolean operation actually feeds in: shared endpoints,
+    /// shared arcs, translated copies and curves that merely brush past.
+    #[test]
+    fn nothing_infinite_comes_back() {
+        let sane = |i: &Intersections| match i {
+            Intersections::Points(hits) => hits
+                .iter()
+                .all(|&(u, v)| (0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v)),
+            Intersections::Overlap { a, b } => {
+                a.0 < a.1 && [a.0, a.1, b.0, b.1].iter().all(|t| (0.0..=1.0).contains(t))
+            }
+        };
+        for (name, make) in [
+            (
+                "finite on random pairs",
+                (|r: &mut Rng| (r.cubic(), r.cubic())) as fn(&mut Rng) -> (CubicBez, CubicBez),
+            ),
+            ("finite on shared endpoints", |r: &mut Rng| {
+                let a = r.cubic();
+                (a, CubicBez::new(a.p3, r.point(), r.point(), a.p0))
+            }),
+            ("finite on shared arcs", |r: &mut Rng| {
+                let c = r.cubic();
+                let (s, t) = (r.unit(), r.unit());
+                (c, c.subsegment(s.min(t), s.max(t)))
+            }),
+            ("finite on near copies", |r: &mut Rng| {
+                // A copy displaced by a hair: the near-coincident case, where
+                // subdivision saturates and the overlap test has to decide.
+                let c = r.cubic();
+                let d = r.vec2() * 1e-9;
+                (c, CubicBez::new(c.p0 + d, c.p1 + d, c.p2 + d, c.p3 + d))
+            }),
+        ] {
+            check(name, 1_500, make, |&(a, b)| {
+                sane(&a.intersect(b)) && sane(&b.intersect(a))
+            });
+        }
     }
 
     #[test]
