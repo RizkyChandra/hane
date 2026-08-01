@@ -18,6 +18,7 @@ mod bbox;
 mod curve;
 mod flatten;
 pub mod fuzz;
+mod nearest;
 mod path;
 mod rect;
 mod split;
