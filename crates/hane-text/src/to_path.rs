@@ -51,6 +51,28 @@ impl Font<'_> {
     }
 }
 
+/// The glyphs of one laid-out [`Line`](crate::layout::Line) as [`PositionedGlyph`]s.
+///
+/// This bridge exists because the two sides disagree about which way `y` points
+/// and nothing else would catch it. `Line::baseline` is measured **downward**
+/// from the top of the paragraph, while `PlacedGlyph::y_offset` comes from GPOS
+/// and is measured **upward** from the baseline -- so the offset is *subtracted*,
+/// not added. Adding it puts every accent on the wrong side of its letter, which
+/// looks like a font bug rather than a sign error and is correspondingly nasty to
+/// find.
+///
+/// `size` is only needed by [`run_to_path`](Font::run_to_path); the positions
+/// here are already in layout units.
+pub fn line_to_glyphs(line: &crate::layout::Line) -> Vec<PositionedGlyph> {
+    line.glyphs
+        .iter()
+        .map(|g| PositionedGlyph {
+            glyph: g.id,
+            position: Point::new(line.x + g.x + g.x_offset, line.baseline - g.y_offset),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,5 +198,54 @@ mod tests {
         let data = square_font();
         let font = Font::parse(&data).unwrap();
         assert!(font.run_to_path(&[], 16.0).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod bridge_tests {
+    use super::*;
+    use crate::layout::{Line, PlacedGlyph};
+
+    fn placed(id: u16, x: f64, x_offset: f64, y_offset: f64) -> PlacedGlyph {
+        PlacedGlyph {
+            id,
+            cluster: 0,
+            x,
+            advance: 10.0,
+            x_offset,
+            y_offset,
+        }
+    }
+
+    #[test]
+    fn gpos_y_offset_is_subtracted_because_the_axes_disagree() {
+        // baseline grows downward; y_offset is "above the baseline". A mark
+        // raised 3 units must land 3 units *nearer the top* of the page.
+        let line = Line {
+            range: 0..1,
+            glyphs: vec![placed(1, 0.0, 0.0, 3.0)],
+            baseline: 100.0,
+            x: 0.0,
+            width: 10.0,
+        };
+        let g = line_to_glyphs(&line);
+        assert_eq!(
+            g[0].position.y, 97.0,
+            "adding instead of subtracting gives 103"
+        );
+    }
+
+    #[test]
+    fn line_x_and_glyph_offsets_all_land_on_the_pen() {
+        let line = Line {
+            range: 0..2,
+            glyphs: vec![placed(1, 0.0, 2.0, 0.0), placed(2, 10.0, -1.0, 0.0)],
+            baseline: 50.0,
+            x: 7.0,
+            width: 20.0,
+        };
+        let g = line_to_glyphs(&line);
+        assert_eq!(g[0].position, Point::new(9.0, 50.0));
+        assert_eq!(g[1].position, Point::new(16.0, 50.0));
     }
 }
