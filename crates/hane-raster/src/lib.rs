@@ -2,7 +2,11 @@
 //!
 //! Phase P1. See `docs/PLAN.md`.
 
+mod clip;
 mod fill;
+mod paint;
 pub mod png;
 
-pub use fill::{Color, Pixmap};
+pub use clip::Clip;
+pub use fill::{Color, FillRule, Pixmap};
+pub use paint::{Paint, Spread, Stop};

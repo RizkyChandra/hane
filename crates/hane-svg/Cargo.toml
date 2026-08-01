@@ -12,3 +12,4 @@ workspace = true
 [dependencies]
 hane-geom.workspace = true
 hane-path.workspace = true
+hane-scene.workspace = true
