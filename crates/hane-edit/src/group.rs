@@ -321,6 +321,11 @@ impl Reorder {
 }
 
 /// The document's paint order, and the shapes `member` moves as one block.
+///
+/// ponytail: the membership tests below are linear scans of the block, so a
+/// reorder is `O(shapes * block)`. It is a keystroke, not a pointer move, and
+/// a block is normally a handful of shapes -- put the block in a `BTreeSet`
+/// when someone raises a group of tens of thousands.
 fn plan(doc: &Document, groups: &Groups, member: Member) -> (Vec<NodeId>, Vec<NodeId>) {
     let order = doc.z_order();
     let shapes = groups.shapes(member);
