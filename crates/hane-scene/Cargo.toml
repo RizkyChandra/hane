@@ -1,0 +1,14 @@
+[package]
+name = "hane-scene"
+description = "Scene graph, spatial index, tile cache and culling (D-004, D-006)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+hane-geom.workspace = true
+hane-path.workspace = true

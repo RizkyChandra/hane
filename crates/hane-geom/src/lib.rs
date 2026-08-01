@@ -1,0 +1,23 @@
+//! Points, vectors, affine transforms, rectangles and Bezier primitives.
+//!
+//! Phase P0. See `docs/PLAN.md`.
+//!
+//! Everything in the engine is built on this crate, so it carries the highest
+//! test coverage per line in the project.
+//!
+//! # Precision
+//!
+//! All geometry is `f64`. A design tool zooms deeply enough that `f32` loses
+//! visible precision in document space -- at high zoom the mantissa runs out
+//! and control points visibly snap. The narrowing to `f32` happens exactly
+//! once, at the GPU buffer boundary in `hane-gpu`, and nowhere else.
+
+mod affine;
+mod path;
+mod rect;
+mod vec2;
+
+pub use affine::Affine;
+pub use path::PathEl;
+pub use rect::Rect;
+pub use vec2::{Point, Vec2};

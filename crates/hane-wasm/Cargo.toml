@@ -1,0 +1,20 @@
+[package]
+name = "hane-wasm"
+description = "wasm-bindgen surface: GL context and event plumbing. Only crate permitted external dependencies (D-001)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+hane-geom.workspace = true
+hane-path.workspace = true
+hane-raster.workspace = true
+hane-scene.workspace = true
+hane-gpu.workspace = true
+hane-svg.workspace = true
+hane-edit.workspace = true
+hane-text.workspace = true
