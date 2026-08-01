@@ -34,9 +34,9 @@
 //!   push and group pop are five modes of one entry point rather than three
 //!   programs, two vertex shaders and a fixed-function blend state.
 //!
-//! The result is roughly a third of the GL submitter's moving parts for the same
-//! picture. Whether it is *faster* is a separate question and is measured in
-//! `BENCHMARKS.md`; correctness came first.
+//! So the same picture comes out with no scratch targets, no blit, no blend
+//! state and no vertex stage. Whether it is *faster* is a separate question and
+//! is measured in `BENCHMARKS.md`; correctness came first.
 //!
 //! # Ordering
 //!
