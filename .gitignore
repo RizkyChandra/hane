@@ -2,7 +2,11 @@
 /web/node_modules
 /web/dist
 /crates/hane-wasm/pkg
+# wasm-bindgen output. `*.wasm` covers hane_bg.wasm; the glue and its types
+# land beside it and are just as generated.
 *.wasm
+/web/public/hane.js
+/web/public/*.d.ts
 /dist
 /crates/hane-raster/tests/golden/*.actual.png
 /crates/hane-raster/tests/golden/*.diff.png

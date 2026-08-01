@@ -19,16 +19,14 @@ interface GlProbe {
 }
 
 /**
- * The exports of `hane-wasm`.
+ * The P0 `extern "C"` exports.
  *
- * Hand-written rather than imported from the generated `hane.d.ts`, because
- * that file only exists after a `cargo build` — typechecking the shell must not
- * require a Rust toolchain. It is a small surface and a mismatch shows up
- * immediately at load, in the self-check below.
+ * These live on the **instance**, not on the glue module: wasm-bindgen only
+ * writes JS wrappers for the items it generated, and passes a raw
+ * `#[unsafe(no_mangle)]` export straight through to `WebAssembly.Instance`.
+ * `init()` hands that object back, which is the only way to reach them.
  */
-interface Hane {
-  /** wasm-bindgen's `init`; fetches and instantiates `hane_bg.wasm`. */
-  default(): Promise<unknown>;
+interface HaneRaw {
   hane_version(): number;
   hane_flatten_count(
     x0: number, y0: number, x1: number, y1: number,
@@ -39,9 +37,28 @@ interface Hane {
     x0: number, y0: number, x1: number, y1: number,
     x2: number, y2: number, x3: number, y3: number,
   ): number;
+}
+
+/**
+ * The `#[wasm_bindgen]` exports: named exports of the generated module.
+ *
+ * Hand-written rather than imported from the generated `hane.d.ts`, because
+ * that file only exists after a `cargo build` — typechecking the shell must not
+ * require a Rust toolchain. It is a small surface and a mismatch shows up
+ * immediately at load, in the self-check below.
+ */
+interface HaneGlue {
+  /** wasm-bindgen's `init`; fetches and instantiates `hane_bg.wasm`. */
+  default(): Promise<HaneRaw>;
   /** Creates the WebGL2 context on `canvas` and probes it. Cached; logs once. */
   hane_gl_probe(canvas: HTMLCanvasElement): GlProbe;
   hane_gl_context_lost(): boolean;
+}
+
+/** Both halves of the engine, kept apart because they are reached differently. */
+interface Hane {
+  glue: HaneGlue;
+  raw: HaneRaw;
 }
 
 const canvas = document.querySelector<HTMLCanvasElement>("#artboard");
@@ -72,9 +89,8 @@ resize(canvas);
  */
 async function loadEngine(): Promise<Hane> {
   const url = new URL("hane.js", document.baseURI).href;
-  const hane = (await import(/* @vite-ignore */ url)) as Hane;
-  await hane.default();
-  return hane;
+  const glue = (await import(/* @vite-ignore */ url)) as HaneGlue;
+  return { glue, raw: await glue.default() };
 }
 
 function formatVersion(v: number): string {
@@ -108,19 +124,19 @@ function report(lines: string[]): void {
 loadEngine().then(
   (hane) => {
     const straight = [0, 0, 1, 0, 2, 0, 3, 0] as const;
-    const length = hane.hane_curve_length(...straight);
-    const points = hane.hane_flatten_count(...straight, 0.1);
+    const length = hane.raw.hane_curve_length(...straight);
+    const points = hane.raw.hane_flatten_count(...straight, 0.1);
     const ok = Math.abs(length - 3) < 1e-9 && points === 2;
 
     const lines = [
-      `hane ${formatVersion(hane.hane_version())} — engine loaded`,
+      `hane ${formatVersion(hane.raw.hane_version())} — engine loaded`,
       `straight cubic: length ${length.toFixed(12)}, ${points} points`,
       ok ? "self-check passed" : "SELF-CHECK FAILED",
       "",
     ];
 
     try {
-      const probe = hane.hane_gl_probe(canvas!);
+      const probe = hane.glue.hane_gl_probe(canvas!);
       lines.push(
         `max texture size    ${probe.max_texture_size}`,
         `max draw buffers    ${probe.max_draw_buffers}`,
