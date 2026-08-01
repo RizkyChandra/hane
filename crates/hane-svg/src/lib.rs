@@ -2,4 +2,6 @@
 //!
 //! Phase P7. See `docs/PLAN.md`.
 
+pub mod style;
+pub mod transform;
 pub mod xml;
