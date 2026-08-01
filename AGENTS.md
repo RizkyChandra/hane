@@ -11,7 +11,11 @@ These are architectural decisions, not preferences. CI enforces all of them.
   `[dev-dependencies]` in any crate except `hane-wasm`. No `proptest`, no `criterion`, no
   `rand`. `scripts/check-zero-deps.py` runs *first* in CI and fails the build. Write what you
   need by hand — see `fuzz.rs` for the property-testing harness that replaced `proptest`.
-- **No unsafe.** The workspace sets `unsafe_code = "forbid"`.
+- **No unsafe.** The workspace sets `unsafe_code = "forbid"`. `hane-wasm` is the sole exception,
+  because `#[unsafe(no_mangle)]` is required to export anything to JS at all.
+- **`hane-gpu` never calls a GL function** (D-010). It computes tile bins, buffer contents and
+  draw commands as plain data; `hane-wasm` holds the context and submits them. This keeps the
+  parts that contain bugs testable with `cargo test`, without a browser.
 - **f64 throughout.** The narrowing to `f32` happens once, at the GPU buffer boundary in
   `hane-gpu`, and nowhere else. A design tool zooms deep enough that `f32` visibly snaps
   control points.
