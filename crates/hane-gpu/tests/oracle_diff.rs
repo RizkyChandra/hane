@@ -18,6 +18,12 @@
 //! many were not -- a run with no artefacts compares nothing and says so, in
 //! those words, rather than passing quietly.
 //!
+//! **There are two renderers and this file cannot tell them apart, on purpose.**
+//! `--backend webgl2` and `--backend webgpu` (#24) write the same artefacts, so
+//! the table below is one tolerance table judging both -- which is the only way
+//! "the second backend matches the first" means anything more than "both are
+//! plausible".
+//!
 //! The alternative -- a software submitter in this file that executed the draw
 //! commands natively -- was rejected: it would be a second copy of the shader
 //! in Rust, and two implementations that drift is exactly the failure D-002
@@ -78,6 +84,11 @@ macro_rules! cases {
 /// |---|---|---|---|
 /// | Chromium 150, SwiftShader | 41 | 1 | 0.0060 |
 /// | Firefox 153, software WebGL | 41 | 1 | 0.0114 |
+///
+/// #24's WebGPU backend was then held to this table unchanged and met it in
+/// both browsers, bit-exact on 33 of 41 in Chromium against WebGL2's 31 -- one
+/// fewer 8-bit round trip, see `BENCHMARKS.md`. A table that had been loosened
+/// for the second backend would have proved nothing about it.
 ///
 /// Thirty-one of the forty-one are **bit-exact** in Chromium and thirty in
 /// Firefox. That is not luck: the fragment shader runs the oracle's own

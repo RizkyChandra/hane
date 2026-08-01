@@ -57,7 +57,7 @@ pub const MAX_GROUP_DEPTH: usize = 4;
 /// ponytail: silent. If a real document ever hits it, the fix is to count the
 /// crossings in a first pass and fall back to a second draw for the tiles that
 /// overflowed.
-const MAX_CROSSINGS: usize = 12;
+pub(crate) const MAX_CROSSINGS: usize = 12;
 
 // ---------------------------------------------------------------------------
 // the shaders
@@ -778,7 +778,7 @@ impl<'a> Gpu<'a> {
 /// Checked here rather than mid-frame: the targets are allocated up front, and
 /// a scene that would need a fifth one has to be turned away before anything
 /// has been drawn.
-fn group_depth(data: &DrawData) -> Result<usize, JsValue> {
+pub(crate) fn group_depth(data: &DrawData) -> Result<usize, JsValue> {
     let (mut depth, mut max) = (0usize, 0usize);
     for op in &data.ops {
         match op {
@@ -798,7 +798,7 @@ fn group_depth(data: &DrawData) -> Result<usize, JsValue> {
     Ok(max)
 }
 
-fn rule_code(rule: FillRule) -> i32 {
+pub(crate) fn rule_code(rule: FillRule) -> i32 {
     match rule {
         FillRule::NonZero => 0,
         FillRule::EvenOdd => 1,
@@ -806,7 +806,7 @@ fn rule_code(rule: FillRule) -> i32 {
 }
 
 /// The blend mode as the shader's `uBlend`, in the order `BlendMode` declares.
-fn blend_code(mode: BlendMode) -> i32 {
+pub(crate) fn blend_code(mode: BlendMode) -> i32 {
     match mode {
         BlendMode::Normal => 0,
         BlendMode::Multiply => 1,

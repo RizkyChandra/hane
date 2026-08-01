@@ -53,6 +53,8 @@ interface HaneGlue {
   /** Creates the WebGL2 context on `canvas` and probes it. Cached; logs once. */
   hane_gl_probe(canvas: HTMLCanvasElement): GlProbe;
   hane_gl_context_lost(): boolean;
+  /** `""`/`"auto"` picks a backend; a name is an override (#24). */
+  hane_backend(preferred: string): Promise<string>;
 }
 
 /** Both halves of the engine, kept apart because they are reached differently. */
@@ -154,6 +156,15 @@ loadEngine().then(
       lines.push(`NO WEBGL2 CONTEXT — ${String(err)}`);
     }
     report(lines);
+
+    // Which backend the engine would render with (#24). `?backend=` overrides
+    // it, and a name this machine cannot honour is reported rather than
+    // silently swapped for the other one.
+    const wanted = new URLSearchParams(location.search).get("backend") ?? "auto";
+    hane.glue.hane_backend(wanted).then(
+      (backend) => report([...lines, "", `backend ${backend} (${wanted})`]),
+      (err: unknown) => report([...lines, "", `NO ${wanted} BACKEND — ${String(err)}`]),
+    );
 
     // Everything the engine exposes, for the console and for the benchmark
     // page, which does not exist yet. `hane_gl_probe` is cached, so that page
