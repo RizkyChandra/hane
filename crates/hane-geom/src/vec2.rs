@@ -100,10 +100,21 @@ impl Vec2 {
         self.y.atan2(self.x)
     }
 
-    /// Linear interpolation. `t = 0` gives `self`, `t = 1` gives `other`.
+    /// Linear interpolation, in the symmetric form `(1 - t) * self + t * other`.
+    ///
+    /// Deliberately not the cheaper `self + (other - self) * t`. That form is
+    /// exact at `t = 0` but not at `t = 1`: for widely separated magnitudes the
+    /// difference cancels the endpoint away entirely, so `self = 1e300` with
+    /// `other = 1.0` returns `0.0` rather than `1.0`. The symmetric form's
+    /// weights are exactly 1 and 0 at *both* ends, which is what de Casteljau
+    /// subdivision relies on to keep shared endpoints bit-exact.
     #[inline]
     pub fn lerp(self, other: Self, t: f64) -> Self {
-        self + (other - self) * t
+        let mt = 1.0 - t;
+        Self {
+            x: mt * self.x + t * other.x,
+            y: mt * self.y + t * other.y,
+        }
     }
 
     /// This displacement read as a position offset from the origin.
@@ -156,10 +167,18 @@ impl Point {
         (other - self).length_squared()
     }
 
-    /// Linear interpolation. `t = 0` gives `self`, `t = 1` gives `other`.
+    /// Linear interpolation, in the symmetric form `(1 - t) * self + t * other`.
+    ///
+    /// See [`Vec2::lerp`] for why the cheaper difference form is not used: it
+    /// loses the `t = 1` endpoint when the two operands differ wildly in
+    /// magnitude, and exact endpoints are what subdivision depends on.
     #[inline]
     pub fn lerp(self, other: Self, t: f64) -> Self {
-        self + (other - self) * t
+        let mt = 1.0 - t;
+        Self {
+            x: mt * self.x + t * other.x,
+            y: mt * self.y + t * other.y,
+        }
     }
 
     /// The midpoint of `self` and `other`.
@@ -391,6 +410,23 @@ mod tests {
         assert_eq!(a.lerp(b, 0.0), a);
         assert_eq!(a.lerp(b, 1.0), b);
         assert_eq!(a.lerp(b, 0.5), a.midpoint(b));
+    }
+
+    #[test]
+    fn lerp_endpoints_survive_wildly_separated_magnitudes() {
+        // The regression that motivates the symmetric form. With the cheaper
+        // `a + (b - a) * t`, the difference cancels `b` away completely and
+        // t = 1 returns 0.0 instead of 1.0.
+        let a = Point::new(1e300, -1e300);
+        let b = Point::new(1.0, 1.0);
+        assert_eq!(a.lerp(b, 1.0), b);
+        assert_eq!(a.lerp(b, 0.0), a);
+        assert_eq!(b.lerp(a, 1.0), a);
+
+        let u = Vec2::new(1e300, -1e300);
+        let v = Vec2::new(1.0, 1.0);
+        assert_eq!(u.lerp(v, 1.0), v);
+        assert_eq!(u.lerp(v, 0.0), u);
     }
 
     #[test]
