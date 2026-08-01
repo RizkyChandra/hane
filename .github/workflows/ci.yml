@@ -2,14 +2,14 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [dev, main]
   pull_request:
 
 jobs:
   rust:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -27,3 +27,40 @@ jobs:
 
       - name: Test
         run: cargo test --workspace
+
+  # The release path compiles to wasm and bundles the shell. Both are verified
+  # on every push rather than only at tag time, so a broken release pipeline is
+  # found on the commit that broke it.
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build wasm
+        run: |
+          cargo build --release --target wasm32-unknown-unknown -p hane-wasm
+          mkdir -p web/public
+          cp target/wasm32-unknown-unknown/release/hane_wasm.wasm web/public/hane.wasm
+
+      - name: Build web bundle
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Check the bundle contains the engine
+        run: test -f web/dist/hane.wasm
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: web-bundle
+          path: web/dist
+          retention-days: 7

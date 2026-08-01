@@ -1,13 +1,22 @@
 [package]
 name = "hane-wasm"
-description = "wasm-bindgen surface: GL context and event plumbing. Only crate permitted external dependencies (D-001)."
+description = "The browser boundary: raw wasm exports the JS shell calls into."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
-[lints]
-workspace = true
+[lib]
+# cdylib for the wasm artifact; rlib so `cargo test --workspace` can still
+# compile and test this crate natively.
+crate-type = ["cdylib", "rlib"]
+
+# Deliberately NOT `workspace = true`. The workspace forbids unsafe, but this
+# crate is the FFI boundary and `#[unsafe(no_mangle)]` is required to export
+# symbols to JS at all. The exemption stops here -- every other crate keeps the
+# workspace's `forbid`.
+[lints.rust]
+missing_docs = "warn"
 
 [dependencies]
 hane-geom.workspace = true

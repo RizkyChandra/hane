@@ -1,0 +1,79 @@
+# GoReleaser config for hane.
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+
+project_name: hane
+
+# hane produces no executables. It is a Rust engine compiled to
+# `wasm32-unknown-unknown` plus a TypeScript shell, so the release artifact is
+# the built web bundle -- unzip it, serve the directory, and you have the app.
+#
+# The wasm and the bundle are built by the release workflow before GoReleaser
+# runs, rather than in `before.hooks`. That keeps the build reproducible from
+# CI alone and lets `goreleaser release --snapshot` be run locally against an
+# already-built tree without needing the wasm target installed.
+builds:
+  - skip: true
+
+archives:
+  # A meta archive: files only, no binaries, so it is platform-independent and
+  # the name template must not reference Os/Arch.
+  - id: web
+    meta: true
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_web"
+    files:
+      # `web/dist/*`, not `web/dist/**/*` -- the doublestar form matches only
+      # files inside subdirectories and silently drops index.html, which is
+      # exactly the file that makes the bundle work. The bundle is flat by
+      # design (see web/vite.config.ts), so a single-level glob is correct.
+      - src: web/dist/*
+        dst: .
+        strip_parent: true
+      - README.md
+      - AGENTS.md
+      - LICENSE*
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  use: github
+  sort: asc
+  groups:
+    - title: Geometry
+      regexp: '(?i)^.*\b(bezier|curve|geom|flatten|arc|bbox|split|nearest)\b.*$'
+      order: 0
+    - title: Engine
+      regexp: '(?i)^.*\b(raster|gpu|scene|quadtree|spatial|tile)\b.*$'
+      order: 1
+    - title: Format
+      regexp: '(?i)^.*\b(svg|xml|path|text|font)\b.*$'
+      order: 2
+    - title: Other
+      order: 99
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - Merge pull request
+      - Merge branch
+
+release:
+  name_template: "hane {{ .Version }}"
+  footer: |
+    ## Running it
+
+    ```sh
+    tar xzf hane_{{ .Version }}_web.tar.gz
+    python3 -m http.server -d . 8080
+    ```
+
+    Then open <http://localhost:8080>. The page loads `hane.wasm` and reports
+    the engine version and a flattening result, which is what proves the
+    toolchain end to end.
+
+    **This is an engine, not yet an editor.** See
+    [`docs/PLAN.md`](https://github.com/RizkyChandra/hane/blob/main/docs/PLAN.md)
+    for what each phase adds and where this sits.
