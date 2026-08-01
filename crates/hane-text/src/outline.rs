@@ -1223,7 +1223,7 @@ impl<'a> Machine<'a, '_> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::opentype::tests::{assemble, be16, be32, head_table, hhea_table, maxp_table};
     use hane_geom::fuzz::{Rng, check};
@@ -1231,7 +1231,7 @@ mod tests {
     // --- TrueType fixtures.
 
     /// A simple glyph from `(x, y, on_curve)` triples, one contour per slice.
-    fn simple(contours: &[&[(i16, i16, bool)]]) -> Vec<u8> {
+    pub(crate) fn simple(contours: &[&[(i16, i16, bool)]]) -> Vec<u8> {
         let mut g = Vec::new();
         be16(&mut g, contours.len() as u16);
         for _ in 0..4 {
@@ -1283,7 +1283,7 @@ mod tests {
     }
 
     /// A font whose `glyf` holds `glyphs`, with a matching long-format `loca`.
-    fn truetype_font(glyphs: &[Vec<u8>]) -> Vec<u8> {
+    pub(crate) fn truetype_font(glyphs: &[Vec<u8>]) -> Vec<u8> {
         let mut glyf = Vec::new();
         let mut loca = Vec::new();
         be32(&mut loca, 0);

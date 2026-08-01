@@ -8,3 +8,4 @@ mod outline;
 pub mod shape;
 #[cfg(test)]
 mod testfont;
+pub mod to_path;
