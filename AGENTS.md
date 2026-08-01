@@ -53,6 +53,14 @@ python3 scripts/check-zero-deps.py
 | `PathEl` | `MoveTo`/`LineTo`/`QuadTo`/`CurveTo`/`ClosePath`. No arcs — SVG arcs convert to cubics at parse time so downstream handles three segment kinds, not four. |
 | `fuzz::{Rng, check}` | Deterministic property testing. `check(name, iters, Rng::cubic, \|c\| ...)`. Failures print a self-contained seed. |
 
+## Branches
+
+**`dev` is the default and the only branch you target.** Open every PR against it.
+
+`main` is the release branch and moves only when a release is cut: `dev` merges into `main`,
+a `v*` tag is pushed, and `.github/workflows/release.yml` builds the wasm, bundles the shell
+and publishes via GoReleaser. Never push to `main` directly and never target it in a PR.
+
 ## Workflow
 
 Work in your own git worktree so parallel agents do not collide:

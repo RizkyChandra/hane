@@ -57,6 +57,22 @@ cargo test --workspace
 python3 scripts/check-zero-deps.py
 ```
 
+## Branches and releases
+
+Work lands on **`dev`** (the default branch). **`main`** moves only for a release: `dev` merges
+in, a `v*` tag is pushed, and GoReleaser builds the wasm, bundles the shell and publishes the
+archive.
+
+Each release ships one artifact — the built web bundle. Unpack it and serve the directory:
+
+```sh
+tar xzf hane_1.0.0_web.tar.gz
+python3 -m http.server 8080
+```
+
+The page loads `hane.wasm` and self-checks a straight-line cubic against its known length, so a
+release that opens correctly has proved the whole toolchain end to end.
+
 ## Prior art
 
 [Inkscape](https://inkscape.org), [Graphite](https://graphite.rs) and
