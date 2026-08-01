@@ -15,6 +15,7 @@
 mod affine;
 mod bbox;
 mod curve;
+pub mod fuzz;
 mod path;
 mod rect;
 mod split;
