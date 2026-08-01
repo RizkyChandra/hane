@@ -1,6 +1,7 @@
 # Benchmarks
 
-Numbers here are medians, produced by hand-rolled harnesses -- D-001 rules out `criterion`.
+Numbers here are medians, produced by hand-rolled harnesses -- D-001 rules out `criterion`. The
+exception is the P3 gate (#31), which is stated as a p99 and is reported as percentiles.
 Every harness lives in an `examples/` directory of the crate it measures and is run with
 `cargo run --release`; a debug build measures the optimiser, not the code.
 
@@ -364,3 +365,177 @@ this script.
   would do better than this script's fresh random cluster each frame.
 - **One thread, one document.** No measurement of a second cache, or of the memory pressure of
   several documents open at once.
+
+---
+
+## The P3 gate: 100k objects at p99 under 16ms (#31)
+
+```sh
+cargo run --release --example gate_bench            # native
+
+cargo build --release --target wasm32-unknown-unknown -p hane-wasm
+mkdir -p web/public && cp target/wasm32-unknown-unknown/release/hane_wasm.wasm web/public/hane.wasm
+cd web && npm ci && npm run build && cd ..
+python3 scripts/gate-bench.py                       # Chrome and Firefox
+```
+
+**Verdict: the gate is not yet answerable, and everything that can be measured today passes
+with room. At 100k the CPU side of a frame is 2.8 ms p99 in Chromium and 3.4 ms in Firefox,
+leaving ~13 ms of the 16 ms budget for a renderer that does not exist yet. At 500k it is 14.3
+and 15.3 ms, which spends the whole budget before a single pixel is filled.**
+
+### Read this before the tables
+
+**There is no GPU renderer.** P2 is unbuilt. Nothing in this repository can turn bins into
+pixels on a canvas, so no number here is a frame time and none should be quoted as one. What is
+measured is every part of a frame that exists:
+
+| phase | what it is | in the real frame? |
+|---|---|---|
+| **cull** | advance the camera, `View::visible_bounds`, one `Quadtree::query`, `TileKey::visible`, one `TileCache::get` per tile | yes, on the CPU, every frame |
+| **encode** | per missed tile: query the index for that tile's square, map to the tile's device pixels, `TileBinner::bin` | yes -- this is the CPU half of the GPU path (D-010) |
+| **raster** | per missed tile: the same segments through `hane-raster` into real pixels | no. This is the *oracle* (D-002), correct rather than fast |
+
+So the bolded **frame** column is `cull + encode`: **the CPU cost of a GPU frame with the GPU
+removed.** It is a lower bound on the real frame. Missing from it: the texture upload of a
+freshly rendered tile, the composite of the ~50 cached tiles that make up the screen, GL state
+changes, and whatever the wasm/JS boundary costs under real `requestAnimationFrame` pacing with
+a garbage collector running. Those are P2's to measure.
+
+`raster` is reported because it is the only thing here that actually produces pixels, and
+because it fills the cache, so the hit rates and the eviction the other two phases see are real.
+Its *time* is not a renderer's -- 214 ms at 100k is D-002 working exactly as designed, and it is
+the number P2 has to beat by three orders of magnitude.
+
+### What was measured
+
+- **Scene.** `n` ellipses, four cubics each, radii 2-20 units, uniform over a **fixed** 4096 x
+  4096 document at every `n`. That is deliberately not what `spatial_bench` and `tile_bench` do
+  -- they grow the document with `n` so density stays constant, which is right for measuring an
+  index and would make this harness report that 1k and 500k cost the same. Here `n` is the
+  number of objects actually competing for the screen: 46 visible at 1k, 4864 at 100k, 24075 at
+  500k.
+- **Script.** 300 frames, first 37 discarded. Zoom 1.0078 per frame, reversing every 90 -- the
+  same gesture as `tile_bench`'s, but reversing so the run crosses a power-of-two tile level in
+  both directions instead of magnifying 10x and then seeing nothing. Pan turns steadily so a
+  fast drag stays inside the document. Purely a function of the frame counter, so a Chromium run
+  and a Firefox run measure identical work, down to the tile: the `visible`, `tiles`,
+  `miss/frame` and `hit rate` columns are byte-identical across all three rows of every table
+  below, which is the check that they are.
+- **Two pan speeds.** 4 px/frame is `tile_bench`'s script and reproduces its ~98% hit rate. 40
+  px/frame is a flick -- 2400 px/s, an ordinary drag, and the speed the cache helps least with.
+  A benchmark that ran only the slow one would report "the frame costs 30 microseconds", which
+  is true of the gentlest gesture in the product and of nothing else.
+- **Percentiles, not medians**, unlike the rest of this file. The gate is stated as a p99 and
+  the p99 is the whole question. Note that p50 encode is *zero* at every size: the median frame
+  has no cache miss and does no encode work at all.
+- **Viewport** 1280x720, 128 px overdraw, 64 MiB tile budget -- the same as `tile_bench`.
+
+Machine: AMD Ryzen 9 9950X3D, Chromium 150.0.7871.186 and Firefox 153.0, both headless on
+Linux, both cross-origin isolated so `performance.now()` reports at 5 us and 20 us rather than
+Firefox's default 1 ms clamp. The page publishes the resolution it measured, because a table of
+quantised nonsense looks exactly like a real one.
+
+All times in milliseconds. **frame** = `cull + encode`, taken as a per-frame sum before the
+percentile -- p99 of a sum is not the sum of the p99s. **cold** is frame 0, where every tile on
+screen misses: a document opening, or a jump to a zoom level never visited.
+
+### Chromium 150, headless, Linux
+
+| n | script | visible | miss/frame | hit rate | cull p99 | encode p99 | **frame p99** | raster p99 | cold |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1000 | navigate | 46 | 0.43 | 98.8% | 0.010 | 0.025 | **0.030** | 2.0 | 0.48 |
+| 1000 | flick | 33 | 1.77 | 95.1% | 0.010 | 0.035 | **0.035** | 4.0 | 0.14 |
+| 10000 | navigate | 508 | 0.43 | 98.8% | 0.015 | 0.210 | **0.210** | 21.8 | 0.79 |
+| 10000 | flick | 369 | 1.77 | 95.1% | 0.015 | 0.345 | **0.355** | 27.3 | 0.96 |
+| 100000 | navigate | 4864 | 0.43 | 98.8% | 0.055 | 1.700 | **1.715** | 214.1 | 7.08 |
+| 100000 | flick | 3591 | 1.77 | 95.1% | 0.045 | 2.760 | **2.785** | 329.3 | 8.68 |
+| 500000 | navigate | 24075 | 0.43 | 98.8% | 0.265 | 7.675 | **7.775** | 882.3 | 37.63 |
+| 500000 | flick | 18036 | 1.77 | 95.1% | 0.185 | 14.155 | **14.275** | 1516.6 | 45.61 |
+
+### Firefox 153, headless, Linux
+
+| n | script | visible | miss/frame | hit rate | cull p99 | encode p99 | **frame p99** | raster p99 | cold |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1000 | navigate | 46 | 0.43 | 98.8% | 0.020 | 0.040 | **0.040** | 2.6 | 0.16 |
+| 1000 | flick | 33 | 1.77 | 95.1% | 0.020 | 0.040 | **0.040** | 4.4 | 0.14 |
+| 10000 | navigate | 508 | 0.43 | 98.8% | 0.020 | 0.220 | **0.220** | 24.6 | 0.84 |
+| 10000 | flick | 369 | 1.77 | 95.1% | 0.020 | 0.380 | **0.380** | 40.7 | 0.98 |
+| 100000 | navigate | 4864 | 0.43 | 98.8% | 0.060 | 1.840 | **1.860** | 256.6 | 8.08 |
+| 100000 | flick | 3591 | 1.77 | 95.1% | 0.060 | 3.380 | **3.420** | 428.2 | 9.38 |
+| 500000 | navigate | 24075 | 0.43 | 98.8% | 0.260 | 9.400 | **9.580** | 1377.9 | 41.20 |
+| 500000 | flick | 18036 | 1.77 | 95.1% | 0.200 | 15.140 | **15.280** | 2104.5 | 47.40 |
+
+### Native, same harness, same script
+
+`cargo run --release --example gate_bench`. The wasm tax, at 100k flick: Chromium 1.19x
+native, Firefox 1.46x.
+
+| n | script | cull p99 | encode p99 | **frame p99** | raster p99 | cold |
+|---|---|---:|---:|---:|---:|---:|
+| 1000 | navigate | 0.002 | 0.017 | **0.018** | 1.7 | 0.08 |
+| 1000 | flick | 0.003 | 0.029 | **0.030** | 2.6 | 0.09 |
+| 10000 | navigate | 0.008 | 0.158 | **0.160** | 15.0 | 0.71 |
+| 10000 | flick | 0.006 | 0.417 | **0.421** | 25.0 | 0.79 |
+| 100000 | navigate | 0.036 | 1.337 | **1.349** | 153.6 | 6.16 |
+| 100000 | flick | 0.035 | 2.308 | **2.334** | 283.4 | 7.22 |
+| 500000 | navigate | 0.188 | 6.947 | **7.040** | 829.2 | 29.87 |
+| 500000 | flick | 0.138 | 11.640 | **11.747** | 1383.5 | 38.24 |
+
+### What the numbers say
+
+**The tile cache is the entire reason these numbers are small.** Encode runs only on tiles that
+missed: 0.43 per frame while navigating, 1.77 while flicking, out of ~50 on screen. #18
+measured a from-scratch bin at 2.85 ms for 10000 segments and 14.8 ms for 50000; the 100k
+viewport here holds 4864 shapes, or 19456 segments, which extrapolates to ~5.6 ms **every
+frame** without a cache against 2.8 ms in the worst frame with one. The cache converts a
+constant per-frame cost into an occasional spike, and the gate rests on that trade.
+
+**The spike is the zoom crossing a tile level.** The script crosses a power of two every ~90
+frames, and the first crossing into a level asks for a whole screen of keys that have never been
+rendered, so every tile misses at once. That frame costs about what the `cold` column costs --
+7-9 ms at 100k, 38-47 ms at 500k -- and there are only one or two of them in 263 counted frames,
+so they sit *above* the p99 rather than in it. **The worst frame in a run is the cold column,
+not the p99 column.** At 100k that worst frame is still inside 16 ms with the GPU's share
+unspent; at 500k it is a visible stall of three frames.
+
+**The CPU oracle is not a fallback.** 214 ms p99 at 100k in Chromium, 1.5 s at 500k. That is
+D-002 working as intended -- `hane-raster` is optimised for being obviously correct -- but it
+settles the "could we just ship the CPU rasterizer" question: no, by three orders of magnitude,
+and P2 is not optional.
+
+**Firefox is consistently slower than Chromium on encode**, by 8% at 100k navigating and 23%
+flicking, and it is the browser that decides the gate. Both are within 1.5x of native, so the
+wasm tax is real but small; the flattener and the slab walk are not being penalised by the
+sandbox.
+
+**Editing is the untested risk, and the arithmetic is reassuring.** This script is pan and zoom
+only, which is what #31 asks for. #30 measured the hit rate falling to 61.8% under 20 scattered
+edits per frame -- about 21 misses per frame instead of 0.43. Frame 0 here encodes 54 misses in
+7.1 ms at 100k, so 21 misses is roughly 2.8 ms of encode per frame, sustained rather than
+occasional: tight, but inside budget. That is arithmetic on someone else's measurement, not a
+measurement. P5 should make it one.
+
+**500k is reported and does not hit 60fps.** Firefox spends 15.3 ms of the 16 ms budget on
+CPU-only work in the flick script, before a pixel is filled, and its worst frame is 47 ms.
+Nothing about a GPU renderer recovers that; the encode path itself would have to get cheaper --
+by keeping the per-tile segment list across frames instead of re-querying and re-transforming
+it, which is the obvious next lever and is not built.
+
+### Things these numbers do not cover
+
+- **The GPU, which is most of a real frame.** No upload of a freshly rendered tile, no composite
+  of the ~50 cached tiles that make up the screen, no GL state, no shader. P2 owns all of it.
+  Quote the **frame** column as a floor, never as a frame time.
+- **No `requestAnimationFrame`.** Frames run back to back with a yield every eight, so there is
+  no vsync, no compositor, and no chance for the browser to interleave a GC pause into a timed
+  span. Real frame pacing will be worse.
+- **Editing, rotation, and everything but a solid fill.** Pan and zoom only. Solid colours only:
+  no strokes (P4 does not exist), no gradients, no clips, no text.
+- **One machine, and a fast one.** A laptop at a third of this speed puts 100k flick at ~9 ms of
+  CPU-only work, which changes the verdict from comfortable to tight. Re-run before trusting it
+  on other hardware.
+- **Headless, one tab, no other load.** No compositor, no other documents, no memory pressure.
+- **Memory is not budgeted.** 500k shapes is ~128 MiB of control points in linear memory before
+  the tile cache's 64 MiB, and nothing here measures what the browser does when a real document
+  is that size.
