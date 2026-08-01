@@ -38,7 +38,7 @@ use hane_geom::{CubicBez, Point};
 /// Lets the shell detect a stale cached `.wasm` against the JS it shipped with.
 #[unsafe(no_mangle)]
 pub extern "C" fn hane_version() -> u32 {
-    10000
+    20000
 }
 
 #[expect(clippy::too_many_arguments, reason = "a cubic is eight coordinates")]
@@ -118,6 +118,6 @@ mod tests {
 
     #[test]
     fn version_is_reported() {
-        assert_eq!(hane_version(), 10000);
+        assert_eq!(hane_version(), 20000);
     }
 }
