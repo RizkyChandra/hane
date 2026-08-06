@@ -5,12 +5,17 @@
 A vector design engine for the web — an Affinity Designer successor that runs in the browser,
 so platform stops mattering.
 
-> **Status: the engine works. There is no application yet.**
+> **Status: the engine works, and there is now something a user can open.**
 >
 > Geometry, both rasterizers, the scene graph, stroking, boolean operations, SVG round-trip,
-> text, and the editing primitives are all built and tested. What does not exist is the thing
-> a user opens: no tools bound to a pointer, no panels, no file open/save. `web/` is a shell
-> and a benchmark page.
+> text, and the editing primitives are all built and tested. On top of them `web/` is now an
+> editor: rectangle, ellipse and pen tools, select / move / scale / rotate, per-shape fill and
+> stroke, a layer list, undo and redo, pan and zoom, and SVG open and save.
+>
+> What it is not yet: no boolean operations in the UI, no text tool, no gradients, no groups,
+> no node editing, no reordering, no snapping — every one of those exists in a crate and none
+> of them is bound to a button. The frame path re-flattens the whole document each frame, so
+> the 100k-object number below is the engine's, not the editor's.
 >
 > See [`docs/PLAN.md`](docs/PLAN.md) for the phases and [`BENCHMARKS.md`](BENCHMARKS.md) for
 > the measurements.

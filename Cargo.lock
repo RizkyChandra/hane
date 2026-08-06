@@ -40,7 +40,7 @@ dependencies = [
 
 [[package]]
 name = "hane-edit"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "hane-geom",
  "hane-path",
@@ -49,11 +49,11 @@ dependencies = [
 
 [[package]]
 name = "hane-geom"
-version = "2.0.0"
+version = "2.1.0"
 
 [[package]]
 name = "hane-gpu"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "hane-geom",
  "hane-path",
@@ -63,14 +63,14 @@ dependencies = [
 
 [[package]]
 name = "hane-path"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "hane-geom",
 ]
 
 [[package]]
 name = "hane-raster"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "hane-geom",
  "hane-path",
@@ -78,7 +78,7 @@ dependencies = [
 
 [[package]]
 name = "hane-scene"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "hane-geom",
  "hane-path",
@@ -86,7 +86,7 @@ dependencies = [
 
 [[package]]
 name = "hane-svg"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "hane-geom",
  "hane-path",
@@ -95,7 +95,7 @@ dependencies = [
 
 [[package]]
 name = "hane-text"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "hane-geom",
  "hane-path",
@@ -103,7 +103,7 @@ dependencies = [
 
 [[package]]
 name = "hane-wasm"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "hane-edit",
  "hane-geom",
