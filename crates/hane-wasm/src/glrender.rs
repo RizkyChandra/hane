@@ -459,7 +459,13 @@ fn render(canvas: &HtmlCanvasElement, scene: &Scene) -> Result<Vec<u8>, JsValue>
         ));
     }
     let data = DrawData::build(scene);
-    let gpu = Gpu::new(&gl, &data)?;
+    let gpu = Gpu::new(
+        &gl,
+        data.width as i32,
+        data.height as i32,
+        group_depth(&data)? + 1,
+    )?;
+    gpu.upload(&data)?;
     gpu.run(&data)?;
     gpu.read_back(&data)
 }
@@ -468,23 +474,28 @@ fn render(canvas: &HtmlCanvasElement, scene: &Scene) -> Result<Vec<u8>, JsValue>
 // the GL objects
 // ---------------------------------------------------------------------------
 
-/// One render's worth of GL state.
+/// One canvas's worth of GL state: the programs, and targets at one size.
 ///
-/// Built and dropped per scene. That is the wrong shape for a frame loop and
-/// the right one for a harness that renders forty-odd independent pictures at
-/// four different sizes; P3's cache is where reuse belongs.
-struct Gpu<'a> {
-    gl: &'a Gl,
+/// The context is owned rather than borrowed so that one of these can outlive
+/// the call that built it: an editor frame reuses the programs and the targets
+/// and only re-uploads the geometry (see [`Gpu::upload`]), because compiling
+/// three shaders per frame costs more than everything else here put together.
+pub(crate) struct Gpu {
+    gl: Gl,
     fill: Program,
     mask: Program,
     group: Program,
     instances: WebGlBuffer,
+    /// The edge list, one RGBA32F texel per edge. Re-uploaded per scene.
+    edges: WebGlTexture,
     /// Layer targets, one per nesting level plus the base, and the scratch copy
     /// each level's draws read from.
     layers: Vec<Target>,
     scratch: Vec<Target>,
     clip: Target,
     size: (i32, i32),
+    /// How many nesting levels [`Gpu::layers`] was built for.
+    levels: usize,
     depth: std::cell::Cell<usize>,
 }
 
@@ -535,8 +546,13 @@ const UNIFORMS: &[&str] = &[
     "uStopColor[0]",
 ];
 
-impl<'a> Gpu<'a> {
-    fn new(gl: &'a Gl, data: &DrawData) -> Result<Self, JsValue> {
+impl Gpu {
+    /// The programs, buffers and `w` by `h` targets for `levels` of nesting.
+    ///
+    /// Nothing scene-specific: [`upload`](Gpu::upload) puts a scene into it,
+    /// and the same `Gpu` takes another as long as the size and the nesting
+    /// depth still fit ([`fits`](Gpu::fits)).
+    pub(crate) fn new(gl: &Gl, w: i32, h: i32, levels: usize) -> Result<Self, JsValue> {
         let head = frag_header();
         let fill = program(
             gl,
@@ -550,9 +566,6 @@ impl<'a> Gpu<'a> {
             &format!("{head}{BLEND_GLSL}{DST_GLSL}{FRAG_GROUP}"),
         )?;
 
-        let (w, h) = (data.width as i32, data.height as i32);
-        // One layer per nesting level the scene actually reaches, and no more.
-        let levels = group_depth(data)? + 1;
         let mut layers = Vec::with_capacity(levels);
         let mut scratch = Vec::with_capacity(levels);
         for _ in 0..levels {
@@ -562,17 +575,21 @@ impl<'a> Gpu<'a> {
         let clip = make_target(gl, w, h, Gl::R16F)?;
 
         let gpu = Self {
-            gl,
+            gl: gl.clone(),
             fill,
             mask,
             group,
             instances: gl
                 .create_buffer()
                 .ok_or_else(|| JsValue::from_str("no instance buffer"))?,
+            edges: gl
+                .create_texture()
+                .ok_or_else(|| JsValue::from_str("no edge texture"))?,
             layers,
             scratch,
             clip,
             size: (w, h),
+            levels,
             depth: std::cell::Cell::new(0),
         };
 
@@ -587,17 +604,32 @@ impl<'a> Gpu<'a> {
         // silently pointing at the other's buffer.
         gl.enable_vertex_attrib_array(ATTR_CORNER);
         gl.vertex_attrib_pointer_with_i32(ATTR_CORNER, 2, Gl::FLOAT, false, 0, 0);
+        gl.disable(Gl::DEPTH_TEST);
+        gl.viewport(0, 0, w, h);
+        Ok(gpu)
+    }
 
-        gl.bind_buffer(Gl::ARRAY_BUFFER, Some(&gpu.instances));
+    /// Whether this `Gpu` can draw a scene of that size and nesting depth.
+    ///
+    /// Targets are allocated at one size in [`new`](Gpu::new), so a resized
+    /// canvas or a deeper document needs a new one; everything else reuses.
+    pub(crate) fn fits(&self, w: i32, h: i32, levels: usize) -> bool {
+        self.size == (w, h) && self.levels >= levels
+    }
+
+    /// Puts one scene's geometry on the GPU and clears the base layer.
+    ///
+    /// Split from [`new`](Gpu::new) so a frame loop pays for this and not for
+    /// three shader compilations.
+    pub(crate) fn upload(&self, data: &DrawData) -> Result<(), JsValue> {
+        let gl = &self.gl;
+        gl.bind_buffer(Gl::ARRAY_BUFFER, Some(&self.instances));
         upload_f32(gl, &data.instances);
 
         // The edge texture: one RGBA32F texel per edge.
         let (ew, eh) = data.edge_texture_size();
-        let edges = gl
-            .create_texture()
-            .ok_or_else(|| JsValue::from_str("no edge texture"))?;
         gl.active_texture(Gl::TEXTURE0);
-        gl.bind_texture(Gl::TEXTURE_2D, Some(&edges));
+        gl.bind_texture(Gl::TEXTURE_2D, Some(&self.edges));
         nearest(gl);
         gl.tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_array_buffer_view(
             Gl::TEXTURE_2D,
@@ -611,19 +643,35 @@ impl<'a> Gpu<'a> {
             Some(&js_sys::Float32Array::from(&data.edges[..])),
         )?;
 
-        gl.disable(Gl::DEPTH_TEST);
-        gl.viewport(0, 0, w, h);
-        // The canvas is never presented -- everything happens in the offscreen
-        // targets -- but a zero-sized drawing buffer upsets some drivers.
-        gl.bind_framebuffer(Gl::FRAMEBUFFER, Some(&gpu.layers[0].fbo));
+        // Draws land in the offscreen layers; the canvas only ever receives the
+        // blit in `present`, and a zero-sized drawing buffer upsets some
+        // drivers, so the viewport is set here rather than left to chance.
+        gl.viewport(0, 0, self.size.0, self.size.1);
+        gl.bind_framebuffer(Gl::FRAMEBUFFER, Some(&self.layers[0].fbo));
         gl.disable(Gl::BLEND);
         gl.clear_color(0.0, 0.0, 0.0, 0.0);
         gl.clear(Gl::COLOR_BUFFER_BIT);
-        Ok(gpu)
+        self.depth.set(0);
+        Ok(())
     }
 
-    fn run(&self, data: &DrawData) -> Result<(), JsValue> {
-        let gl = self.gl;
+    /// Blits the finished base layer onto the canvas the context belongs to.
+    ///
+    /// A blit and not a textured quad: the layer is already RGBA8 premultiplied
+    /// at exactly the drawing buffer's size, so this copies bytes and cannot
+    /// resample or round them a second time. GL's row 0 is the bottom in both
+    /// framebuffers, so the copy is 1:1 with no flip.
+    pub(crate) fn present(&self) {
+        let gl = &self.gl;
+        let (w, h) = self.size;
+        gl.bind_framebuffer(Gl::READ_FRAMEBUFFER, Some(&self.layers[0].fbo));
+        gl.bind_framebuffer(Gl::DRAW_FRAMEBUFFER, None);
+        gl.blit_framebuffer(0, 0, w, h, 0, 0, w, h, Gl::COLOR_BUFFER_BIT, Gl::NEAREST);
+        gl.bind_framebuffer(Gl::FRAMEBUFFER, None);
+    }
+
+    pub(crate) fn run(&self, data: &DrawData) -> Result<(), JsValue> {
+        let gl = &self.gl;
         let size = (data.width as f32, data.height as f32);
         for op in &data.ops {
             match op {
@@ -707,7 +755,7 @@ impl<'a> Gpu<'a> {
     /// Blits layer `level` into its scratch copy, which is what the next draw
     /// reads as its backdrop. See the module docs on why every draw does this.
     fn copy_aside(&self, level: usize) {
-        let gl = self.gl;
+        let gl = &self.gl;
         let (w, h) = (self.width(), self.height());
         gl.bind_framebuffer(Gl::READ_FRAMEBUFFER, Some(&self.layers[level].fbo));
         gl.bind_framebuffer(Gl::DRAW_FRAMEBUFFER, Some(&self.scratch[level].fbo));
@@ -719,7 +767,7 @@ impl<'a> Gpu<'a> {
         if count == 0 {
             return;
         }
-        let gl = self.gl;
+        let gl = &self.gl;
         gl.bind_buffer(Gl::ARRAY_BUFFER, Some(&self.instances));
         gl.enable_vertex_attrib_array(ATTR_INST);
         // No base-instance in WebGL2, so the range is expressed as a byte
@@ -730,7 +778,7 @@ impl<'a> Gpu<'a> {
     }
 
     fn set_paint(&self, p: &PaintData) {
-        let gl = self.gl;
+        let gl = &self.gl;
         gl.uniform1i(self.fill.loc("uKind"), p.kind as i32);
         gl.uniform1i(self.fill.loc("uSpread"), p.spread as i32);
         gl.uniform2f(self.fill.loc("uG0"), p.g0[0], p.g0[1]);
@@ -750,8 +798,8 @@ impl<'a> Gpu<'a> {
     }
 
     /// The finished base layer, flipped back to the pixmap's row order.
-    fn read_back(&self, data: &DrawData) -> Result<Vec<u8>, JsValue> {
-        let gl = self.gl;
+    pub(crate) fn read_back(&self, data: &DrawData) -> Result<Vec<u8>, JsValue> {
+        let gl = &self.gl;
         let (w, h) = (data.width as usize, data.height as usize);
         let mut buf = vec![0u8; w * h * 4];
         gl.bind_framebuffer(Gl::FRAMEBUFFER, Some(&self.layers[0].fbo));

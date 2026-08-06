@@ -26,6 +26,7 @@
 //! toolchain end to end: cargo, the `wasm32-unknown-unknown` target, `f64`
 //! maths under wasm, and the JS loader.
 
+pub mod app;
 pub mod bench;
 pub mod glctx;
 pub mod glrender;
@@ -38,7 +39,7 @@ use hane_geom::{CubicBez, Point};
 /// Lets the shell detect a stale cached `.wasm` against the JS it shipped with.
 #[unsafe(no_mangle)]
 pub extern "C" fn hane_version() -> u32 {
-    20000
+    20100
 }
 
 #[expect(clippy::too_many_arguments, reason = "a cubic is eight coordinates")]
@@ -118,6 +119,6 @@ mod tests {
 
     #[test]
     fn version_is_reported() {
-        assert_eq!(hane_version(), 20000);
+        assert_eq!(hane_version(), 20100);
     }
 }
